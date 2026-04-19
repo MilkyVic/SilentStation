@@ -198,7 +198,7 @@ const toApiUser = (account) => ({
     profile: account.profile,
 });
 const findAccountByUsername = async (username) => {
-    const result = await pool.query(`
+    const result = await getPool().query(`
       SELECT
         id,
         username,
@@ -220,7 +220,7 @@ const findAccountByUsername = async (username) => {
     return mapUserRow(result.rows[0]);
 };
 const findAccountById = async (id) => {
-    const result = await pool.query(`
+    const result = await getPool().query(`
       SELECT
         id,
         username,
@@ -348,7 +348,14 @@ export const initializeAuthCore = async () => {
                 seed.profile.className,
             ]);
         }
-    })();
+    })().catch((error) => {
+        initializedPromise = null;
+        if (error instanceof AuthHttpError) {
+            throw error;
+        }
+        console.error('[auth-core] init failed', error);
+        throw new AuthHttpError(500, 'AUTH_SERVER_ERROR', 'Khong the ket noi PostgreSQL. Kiem tra DATABASE_URL va network.');
+    });
     return initializedPromise;
 };
 export const healthCheck = async () => {

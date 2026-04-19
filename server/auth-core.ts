@@ -310,7 +310,7 @@ const toApiUser = (account: StoredAccount): ApiUser => ({
 });
 
 const findAccountByUsername = async (username: string): Promise<StoredAccount | null> => {
-  const result = await pool.query<UserRow>(
+  const result = await getPool().query<UserRow>(
     `
       SELECT
         id,
@@ -335,7 +335,7 @@ const findAccountByUsername = async (username: string): Promise<StoredAccount | 
 };
 
 const findAccountById = async (id: string): Promise<StoredAccount | null> => {
-  const result = await pool.query<UserRow>(
+  const result = await getPool().query<UserRow>(
     `
       SELECT
         id,
@@ -488,7 +488,20 @@ export const initializeAuthCore = async () => {
         ],
       );
     }
-  })();
+  })().catch((error) => {
+    initializedPromise = null;
+
+    if (error instanceof AuthHttpError) {
+      throw error;
+    }
+
+    console.error('[auth-core] init failed', error);
+    throw new AuthHttpError(
+      500,
+      'AUTH_SERVER_ERROR',
+      'Khong the ket noi PostgreSQL. Kiem tra DATABASE_URL va network.',
+    );
+  });
 
   return initializedPromise;
 };
@@ -620,4 +633,5 @@ export const logoutToken = async (token: string | null) => {
   if (!payload) return;
   await revokeSession(payload.jti);
 };
+
 
