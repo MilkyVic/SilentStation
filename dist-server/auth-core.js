@@ -14,16 +14,22 @@ const ACCESS_TOKEN_TTL_SECONDS = Number(process.env.AUTH_ACCESS_TOKEN_TTL_SECOND
 const AUTH_SEED_TEST_USERS = process.env.AUTH_SEED_TEST_USERS
     ? process.env.AUTH_SEED_TEST_USERS === 'true'
     : process.env.NODE_ENV !== 'production';
-if (!DATABASE_URL) {
-    throw new Error('DATABASE_URL is required');
-}
-if (process.env.NODE_ENV === 'production' && AUTH_SESSION_SECRET === 'dev-only-change-me') {
-    throw new Error('AUTH_SESSION_SECRET is required in production');
-}
-const pool = new Pool({
-    connectionString: DATABASE_URL,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-});
+let pool = null;
+const getPool = () => {
+    if (process.env.NODE_ENV === 'production' && AUTH_SESSION_SECRET === 'dev-only-change-me') {
+        throw new AuthHttpError(500, 'AUTH_SERVER_ERROR', 'Thieu bien moi truong AUTH_SESSION_SECRET.');
+    }
+    if (!DATABASE_URL) {
+        throw new AuthHttpError(500, 'AUTH_SERVER_ERROR', 'Thieu bien moi truong DATABASE_URL.');
+    }
+    if (pool)
+        return pool;
+    pool = new Pool({
+        connectionString: DATABASE_URL,
+        ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+    });
+    return pool;
+};
 const authSchemaSql = `
 CREATE TABLE IF NOT EXISTS auth_users (
   id TEXT PRIMARY KEY,
@@ -236,7 +242,7 @@ const findAccountById = async (id) => {
     return mapUserRow(result.rows[0]);
 };
 const insertAccount = async (account) => {
-    await pool.query(`
+    await getPool().query(`
       INSERT INTO auth_users (
         id,
         username,
@@ -268,7 +274,7 @@ const insertAccount = async (account) => {
     ]);
 };
 const insertSession = async (payload) => {
-    await pool.query(`
+    await getPool().query(`
       INSERT INTO auth_sessions (jti, user_id, exp_at)
       VALUES ($1, $2, TO_TIMESTAMP($3))
       ON CONFLICT (jti)
@@ -279,7 +285,7 @@ const insertSession = async (payload) => {
     `, [payload.jti, payload.sub, payload.exp]);
 };
 const isSessionActive = async (jti) => {
-    const result = await pool.query(`
+    const result = await getPool().query(`
       SELECT 1
       FROM auth_sessions
       WHERE jti = $1
@@ -290,7 +296,7 @@ const isSessionActive = async (jti) => {
     return (result.rowCount || 0) > 0;
 };
 const revokeSession = async (jti) => {
-    await pool.query(`
+    await getPool().query(`
       UPDATE auth_sessions
       SET revoked_at = NOW()
       WHERE jti = $1
@@ -298,18 +304,18 @@ const revokeSession = async (jti) => {
     `, [jti]);
 };
 const cleanupExpiredSessions = async () => {
-    await pool.query('DELETE FROM auth_sessions WHERE exp_at <= NOW()');
+    await getPool().query('DELETE FROM auth_sessions WHERE exp_at <= NOW()');
 };
 let initializedPromise = null;
 export const initializeAuthCore = async () => {
     if (initializedPromise)
         return initializedPromise;
     initializedPromise = (async () => {
-        await pool.query(authSchemaSql);
+        await getPool().query(authSchemaSql);
         if (!AUTH_SEED_TEST_USERS)
             return;
         for (const seed of seedAccounts) {
-            await pool.query(`
+            await getPool().query(`
           INSERT INTO auth_users (
             id,
             username,
@@ -348,7 +354,7 @@ export const initializeAuthCore = async () => {
 export const healthCheck = async () => {
     await initializeAuthCore();
     await cleanupExpiredSessions();
-    await pool.query('SELECT 1');
+    await getPool().query('SELECT 1');
     return { ok: true, service: 'auth-api' };
 };
 export const registerAccount = async (payload) => {
