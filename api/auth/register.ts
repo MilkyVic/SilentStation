@@ -1,5 +1,5 @@
-﻿import { registerAccount } from '../../server/auth-core';
-import { ensureMethod, handleApiError, readJsonBody } from '../_lib/handler';
+import { registerAccount } from '../../server/auth-core.js';
+import { ensureMethod, handleApiError, readJsonBody } from '../_lib/handler.js';
 
 export default async function handler(req: any, res: any) {
   if (!ensureMethod(req, res, ['POST'])) return;
@@ -11,3 +11,4 @@ export default async function handler(req: any, res: any) {
     handleApiError(res, error);
   }
 }
+

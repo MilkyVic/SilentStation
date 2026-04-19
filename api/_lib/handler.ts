@@ -1,4 +1,4 @@
-﻿import { AuthHttpError } from '../../server/auth-core';
+import { AuthHttpError } from '../../server/auth-core.js';
 
 export const CORS_ORIGIN = process.env.AUTH_API_CORS_ORIGIN || '*';
 
@@ -67,3 +67,4 @@ export const handleApiError = (res: any, error: unknown) => {
     },
   });
 };
+

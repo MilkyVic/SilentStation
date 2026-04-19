@@ -1,5 +1,5 @@
-﻿import { getCurrentUser } from '../../server/auth-core';
-import { ensureMethod, getBearerToken, handleApiError } from '../_lib/handler';
+import { getCurrentUser } from '../../server/auth-core.js';
+import { ensureMethod, getBearerToken, handleApiError } from '../_lib/handler.js';
 
 export default async function handler(req: any, res: any) {
   if (!ensureMethod(req, res, ['GET'])) return;
@@ -11,3 +11,4 @@ export default async function handler(req: any, res: any) {
     handleApiError(res, error);
   }
 }
+
