@@ -1,5 +1,6 @@
 export type AuthRole = 'Học sinh' | 'Giáo viên' | 'Admin' | 'Quản trị viên cấp cao';
 export type AuthStatus = 'active' | 'pending' | 'suspended';
+export type TeacherType = 'homeroom' | 'subject' | '';
 
 export type AuthAccount = {
   id: string;
@@ -14,6 +15,8 @@ export type AuthAccount = {
     gender: string;
     school: string;
     className: string;
+    teacherType: TeacherType;
+    subject: string;
   };
 };
 
@@ -56,6 +59,8 @@ export type AuthApiRegisterRequest = {
     gender: string;
     school: string;
     className: string;
+    teacherType: TeacherType;
+    subject: string;
   };
   regCode?: string;
 };
@@ -72,6 +77,8 @@ export type AuthApiUser = {
     gender: string;
     school: string;
     className: string;
+    teacherType: TeacherType;
+    subject: string;
   };
 };
 

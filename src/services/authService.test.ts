@@ -12,6 +12,8 @@ const buildRegisterPayload = (username: string) => ({
     gender: 'Other',
     school: 'Demo School',
     className: '12A1',
+    teacherType: 'homeroom' as const,
+    subject: '',
   },
 });
 
@@ -34,6 +36,20 @@ describe('authService', () => {
     const session = await authService.getCurrentSession();
     assert.ok(session);
     assert.equal(session?.id, login.account.id);
+  });
+
+  test('logs in with seeded subject teacher account', async () => {
+    const login = await authService.login({
+      username: 'teacher_subject_test',
+      password: '123456',
+    });
+
+    assert.equal(login.ok, true);
+    if (!login.ok) {
+      return;
+    }
+
+    assert.equal(login.account.status, 'active');
   });
 
   test('returns AUTH_INVALID_CREDENTIALS when password is wrong', async () => {
@@ -100,3 +116,4 @@ describe('authService', () => {
     assert.equal(await authService.getCurrentSession(), null);
   });
 });
+

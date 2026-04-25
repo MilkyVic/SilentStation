@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'motion/react';
-import { ArrowRight, Clock, GraduationCap, Lock, Mail, School, Sparkles, User, Users } from 'lucide-react';
+import { ArrowRight, BookOpen, Clock, GraduationCap, Lock, Mail, School, Sparkles, User, Users } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { authService } from '../../services/authService';
 import type { AuthAccount, AuthRole, AuthResult } from '../../types/auth';
@@ -49,6 +49,8 @@ export default function AuthView({
     gender: '',
     school: '',
     className: '',
+    teacherType: 'homeroom' as 'homeroom' | 'subject',
+    subject: '',
     role: STUDENT_ROLE,
     regCode: '',
   });
@@ -157,6 +159,8 @@ export default function AuthView({
                         gender: authForm.gender || '',
                         school: authForm.school,
                         className: assignedClassName,
+                        teacherType: '',
+                        subject: '',
                       },
                     });
 
@@ -170,7 +174,27 @@ export default function AuthView({
                   }
 
                   if (authForm.role === TEACHER_ROLE) {
+                    if (authForm.teacherType !== 'homeroom' && authForm.teacherType !== 'subject') {
+                      setRegError('Vui long chon loai giao vien.');
+                      return;
+                    }
+
+                    if (authForm.teacherType === 'homeroom' && !authForm.className.trim()) {
+                      setRegError('Vui long nhap lop chu nhiem.');
+                      return;
+                    }
+
+                    if (authForm.teacherType === 'subject' && !authForm.subject.trim()) {
+                      setRegError('Vui long nhap mon giang day.');
+                      return;
+                    }
+
                     const linkedSchoolId = schools.find((school) => school.name === authForm.school)?.id;
+                    const normalizedClassName =
+                      authForm.teacherType === 'homeroom' ? authForm.className.trim() : '';
+                    const normalizedSubject =
+                      authForm.teacherType === 'subject' ? authForm.subject.trim() : '';
+
                     const newPendingTeacher = {
                       id: `p${Date.now()}`,
                       name: authForm.fullName || authForm.username,
@@ -178,7 +202,9 @@ export default function AuthView({
                       school: authForm.school,
                       schoolId: linkedSchoolId,
                       username: normalizedUsername,
-                      className: authForm.className,
+                      className: normalizedClassName,
+                      teacherType: authForm.teacherType,
+                      subject: normalizedSubject,
                       role: TEACHER_ROLE,
                       timestamp: Date.now(),
                     };
@@ -192,7 +218,9 @@ export default function AuthView({
                         birthYear: authForm.birthYear || '',
                         gender: authForm.gender || '',
                         school: authForm.school,
-                        className: authForm.className,
+                        className: normalizedClassName,
+                        teacherType: authForm.teacherType,
+                        subject: normalizedSubject,
                       },
                     });
 
@@ -253,7 +281,15 @@ export default function AuthView({
                       <button
                         key={role}
                         type="button"
-                        onClick={() => setAuthForm({ ...authForm, role })}
+                        onClick={() =>
+                          setAuthForm({
+                            ...authForm,
+                            role,
+                            teacherType: role === TEACHER_ROLE ? authForm.teacherType : 'homeroom',
+                            subject: role === TEACHER_ROLE ? authForm.subject : '',
+                            className: role === TEACHER_ROLE ? authForm.className : '',
+                          })
+                        }
                         className={cn(
                           'flex-1 py-3 rounded-2xl text-xs font-black uppercase tracking-widest transition-all',
                           authForm.role === role
@@ -407,21 +443,75 @@ export default function AuthView({
                   </div>
 
                   {authForm.role === TEACHER_ROLE && (
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">
-                        Lớp
-                      </label>
-                      <div className="relative">
-                        <GraduationCap className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-                        <input
-                          type="text"
-                          required
-                          value={authForm.className}
-                          onChange={(e) => setAuthForm({ ...authForm, className: e.target.value })}
-                          className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
-                          placeholder="Nhập tên lớp"
-                        />
+                    <div className="space-y-5">
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">
+                          Loại giáo viên
+                        </label>
+                        <div className="flex flex-wrap gap-2">
+                          {[
+                            { id: 'homeroom', label: 'Giáo viên chủ nhiệm' },
+                            { id: 'subject', label: 'Giáo viên bộ môn' },
+                          ].map((item) => (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() =>
+                                setAuthForm({
+                                  ...authForm,
+                                  teacherType: item.id as 'homeroom' | 'subject',
+                                  className: item.id === 'homeroom' ? authForm.className : '',
+                                  subject: item.id === 'subject' ? authForm.subject : '',
+                                })
+                              }
+                              className={cn(
+                                'px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all',
+                                authForm.teacherType === item.id
+                                  ? 'bg-brand-primary text-white shadow-lg shadow-brand-primary/20'
+                                  : 'bg-gray-50 text-gray-500 hover:bg-brand-primary/10 hover:text-brand-primary',
+                              )}
+                            >
+                              {item.label}
+                            </button>
+                          ))}
+                        </div>
                       </div>
+
+                      {authForm.teacherType === 'homeroom' ? (
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">
+                            Lớp chủ nhiệm
+                          </label>
+                          <div className="relative">
+                            <GraduationCap className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                            <input
+                              type="text"
+                              required
+                              value={authForm.className}
+                              onChange={(e) => setAuthForm({ ...authForm, className: e.target.value })}
+                              className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
+                              placeholder="Nhập tên lớp"
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">
+                            Môn giảng dạy
+                          </label>
+                          <div className="relative">
+                            <BookOpen className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                            <input
+                              type="text"
+                              required
+                              value={authForm.subject}
+                              onChange={(e) => setAuthForm({ ...authForm, subject: e.target.value })}
+                              className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
+                              placeholder="VD: Toán, Ngữ văn, Tiếng Anh"
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -468,6 +558,8 @@ export default function AuthView({
                     role: newMode === 'register'
                       ? (authForm.role === TEACHER_ROLE ? TEACHER_ROLE : STUDENT_ROLE)
                       : authForm.role,
+                    teacherType: authForm.role === TEACHER_ROLE ? authForm.teacherType : 'homeroom',
+                    subject: authForm.role === TEACHER_ROLE ? authForm.subject : '',
                   });
                 }}
                 className="text-xs font-bold text-brand-primary hover:underline uppercase tracking-widest"
@@ -481,3 +573,4 @@ export default function AuthView({
     </motion.div>
   );
 }
+

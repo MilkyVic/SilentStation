@@ -27,6 +27,8 @@ type RegisterPayload = {
     gender: string;
     school: string;
     className: string;
+    teacherType: 'homeroom' | 'subject' | '';
+    subject: string;
   };
 };
 
@@ -47,6 +49,8 @@ const TEST_AUTH_ACCOUNTS: AuthAccount[] = [
       gender: 'Nữ',
       school: 'THPT Chuyên Hà Nội - Amsterdam',
       className: '12A1',
+      teacherType: '',
+      subject: '',
     },
   },
   {
@@ -62,6 +66,25 @@ const TEST_AUTH_ACCOUNTS: AuthAccount[] = [
       gender: 'Nam',
       school: 'THPT Chuyên Hà Nội - Amsterdam',
       className: '12A1',
+      teacherType: 'homeroom',
+      subject: '',
+    },
+  },
+  {
+    id: 'acc-teacher-subject-1',
+    username: 'teacher_subject_test',
+    password: '123456',
+    role: 'Giáo viên',
+    status: 'active',
+    profile: {
+      name: 'Giao vien bo mon test',
+      email: 'teacher_subject_test@tram-an.vn',
+      birthYear: '1989',
+      gender: 'Nu',
+      school: 'THPT Chuyên Hà Nội - Amsterdam',
+      className: '',
+      teacherType: 'subject',
+      subject: 'toan',
     },
   },
   {
@@ -77,6 +100,8 @@ const TEST_AUTH_ACCOUNTS: AuthAccount[] = [
       gender: 'Nam',
       school: 'THPT Chuyên Hà Nội - Amsterdam',
       className: '',
+      teacherType: '',
+      subject: '',
     },
   },
   {
@@ -92,6 +117,8 @@ const TEST_AUTH_ACCOUNTS: AuthAccount[] = [
       gender: 'Nữ',
       school: '',
       className: '',
+      teacherType: '',
+      subject: '',
     },
   },
 ];
@@ -139,6 +166,11 @@ const buildAccount = (
     gender: payload.profile.gender || '',
     school: payload.profile.school || '',
     className: payload.profile.className || '',
+    teacherType:
+      role === 'Giáo viên'
+        ? (payload.profile.teacherType || (payload.profile.className ? 'homeroom' : 'subject'))
+        : '',
+    subject: role === 'Giáo viên' ? payload.profile.subject || '' : '',
   },
 });
 
@@ -155,21 +187,30 @@ const mapApiStatusToAuthStatus = (status: ApiStatus): AuthStatus => {
   return 'active';
 };
 
-const mapApiUserToAccount = (user: AuthApiUser, password = ''): AuthAccount => ({
-  id: user.id,
-  username: normalizeUsername(user.username),
-  password,
-  role: mapApiRoleToAuthRole(user.role),
-  status: mapApiStatusToAuthStatus(user.status),
-  profile: {
-    name: user.profile.name || user.username,
-    email: user.profile.email || `${user.username}@tram-an.vn`,
-    birthYear: user.profile.birthYear || '',
-    gender: user.profile.gender || '',
-    school: user.profile.school || '',
-    className: user.profile.className || '',
-  },
-});
+const mapApiUserToAccount = (user: AuthApiUser, password = ''): AuthAccount => {
+  const role = mapApiRoleToAuthRole(user.role);
+  const teacherType = role === 'Giáo viên'
+    ? (user.profile.teacherType || (user.profile.className ? 'homeroom' : 'subject'))
+    : '';
+
+  return {
+    id: user.id,
+    username: normalizeUsername(user.username),
+    password,
+    role,
+    status: mapApiStatusToAuthStatus(user.status),
+    profile: {
+      name: user.profile.name || user.username,
+      email: user.profile.email || `${user.username}@tram-an.vn`,
+      birthYear: user.profile.birthYear || '',
+      gender: user.profile.gender || '',
+      school: user.profile.school || '',
+      className: user.profile.className || '',
+      teacherType,
+      subject: role === 'Giáo viên' ? (user.profile.subject || '') : '',
+    },
+  };
+};
 
 const isBrowser = () => typeof window !== 'undefined';
 
@@ -311,7 +352,11 @@ export const authService = {
         password: payload.password,
         role: 'student',
         regCode: payload.regCode,
-        profile: payload.profile,
+        profile: {
+          ...payload.profile,
+          teacherType: '',
+          subject: '',
+        },
       }),
     });
 
@@ -336,7 +381,11 @@ export const authService = {
         username: normalizeUsername(payload.username),
         password: payload.password,
         role: 'teacher',
-        profile: payload.profile,
+        profile: {
+          ...payload.profile,
+          teacherType: payload.profile.teacherType || (payload.profile.className ? 'homeroom' : 'subject'),
+          subject: payload.profile.subject || '',
+        },
       }),
     });
 
@@ -469,3 +518,4 @@ export const authService = {
     setStoredToken(null);
   },
 };
+

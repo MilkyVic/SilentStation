@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 
 export type ApiRole = 'student' | 'teacher' | 'admin' | 'superadmin';
 export type ApiStatus = 'active' | 'pending' | 'suspended';
+export type TeacherType = 'homeroom' | 'subject' | '';
 export type AuthErrorCode =
   | 'AUTH_USERNAME_EXISTS'
   | 'AUTH_INVALID_CREDENTIALS'
@@ -23,6 +24,8 @@ type StoredAccount = {
     gender: string;
     school: string;
     className: string;
+    teacherType: TeacherType;
+    subject: string;
   };
 };
 
@@ -50,6 +53,8 @@ type UserRow = {
   profile_gender: string;
   profile_school: string;
   profile_class_name: string;
+  profile_teacher_type: TeacherType;
+  profile_subject: string;
 };
 
 export type RegisterInput = {
@@ -64,6 +69,8 @@ export type RegisterInput = {
     gender: string;
     school: string;
     className: string;
+    teacherType: TeacherType;
+    subject: string;
   };
 };
 
@@ -84,6 +91,8 @@ export type ApiUser = {
     gender: string;
     school: string;
     className: string;
+    teacherType: TeacherType;
+    subject: string;
   };
 };
 
@@ -150,9 +159,17 @@ CREATE TABLE IF NOT EXISTS auth_users (
   profile_gender TEXT NOT NULL DEFAULT '',
   profile_school TEXT NOT NULL DEFAULT '',
   profile_class_name TEXT NOT NULL DEFAULT '',
+  profile_teacher_type TEXT NOT NULL DEFAULT '' CHECK (profile_teacher_type IN ('', 'homeroom', 'subject')),
+  profile_subject TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE auth_users
+  ADD COLUMN IF NOT EXISTS profile_teacher_type TEXT NOT NULL DEFAULT '' CHECK (profile_teacher_type IN ('', 'homeroom', 'subject'));
+
+ALTER TABLE auth_users
+  ADD COLUMN IF NOT EXISTS profile_subject TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_auth_users_username ON auth_users (username);
 
@@ -182,6 +199,8 @@ const seedAccounts: SeedAccount[] = [
       gender: 'Nu',
       school: 'THPT Chuyen Ha Noi - Amsterdam',
       className: '12A1',
+      teacherType: '',
+      subject: '',
     },
   },
   {
@@ -197,6 +216,25 @@ const seedAccounts: SeedAccount[] = [
       gender: 'Nam',
       school: 'THPT Chuyen Ha Noi - Amsterdam',
       className: '12A1',
+      teacherType: 'homeroom',
+      subject: '',
+    },
+  },
+  {
+    id: 'acc-teacher-subject-1',
+    username: 'teacher_subject_test',
+    password: '123456',
+    role: 'teacher',
+    status: 'active',
+    profile: {
+      name: 'Giao vien bo mon test',
+      email: 'teacher_subject_test@tram-an.vn',
+      birthYear: '1989',
+      gender: 'Nu',
+      school: 'THPT Chuyen Ha Noi - Amsterdam',
+      className: '',
+      teacherType: 'subject',
+      subject: 'toan',
     },
   },
   {
@@ -212,6 +250,8 @@ const seedAccounts: SeedAccount[] = [
       gender: 'Nam',
       school: 'THPT Chuyen Ha Noi - Amsterdam',
       className: '',
+      teacherType: '',
+      subject: '',
     },
   },
   {
@@ -227,6 +267,8 @@ const seedAccounts: SeedAccount[] = [
       gender: 'Nu',
       school: '',
       className: '',
+      teacherType: '',
+      subject: '',
     },
   },
 ];
@@ -298,6 +340,8 @@ const mapUserRow = (row: UserRow): StoredAccount => ({
     gender: row.profile_gender,
     school: row.profile_school,
     className: row.profile_class_name,
+    teacherType: row.profile_teacher_type || (row.profile_class_name ? 'homeroom' : ''),
+    subject: row.profile_subject || '',
   },
 });
 
@@ -323,7 +367,9 @@ const findAccountByUsername = async (username: string): Promise<StoredAccount | 
         profile_birth_year,
         profile_gender,
         profile_school,
-        profile_class_name
+        profile_class_name,
+        profile_teacher_type,
+        profile_subject
       FROM auth_users
       WHERE username = $1
       LIMIT 1
@@ -348,7 +394,9 @@ const findAccountById = async (id: string): Promise<StoredAccount | null> => {
         profile_birth_year,
         profile_gender,
         profile_school,
-        profile_class_name
+        profile_class_name,
+        profile_teacher_type,
+        profile_subject
       FROM auth_users
       WHERE id = $1
       LIMIT 1
@@ -373,10 +421,12 @@ const insertAccount = async (account: StoredAccount) => {
         profile_birth_year,
         profile_gender,
         profile_school,
-        profile_class_name
+        profile_class_name,
+        profile_teacher_type,
+        profile_subject
       ) VALUES (
         $1, $2, $3, $4, $5,
-        $6, $7, $8, $9, $10, $11
+        $6, $7, $8, $9, $10, $11, $12, $13
       )
     `,
     [
@@ -391,6 +441,8 @@ const insertAccount = async (account: StoredAccount) => {
       account.profile.gender,
       account.profile.school,
       account.profile.className,
+      account.profile.teacherType || '',
+      account.profile.subject || '',
     ],
   );
 };
@@ -465,10 +517,12 @@ export const initializeAuthCore = async () => {
             profile_birth_year,
             profile_gender,
             profile_school,
-            profile_class_name
+            profile_class_name,
+            profile_teacher_type,
+            profile_subject
           ) VALUES (
             $1, $2, $3, $4, $5,
-            $6, $7, $8, $9, $10, $11
+            $6, $7, $8, $9, $10, $11, $12, $13
           )
           ON CONFLICT (username)
           DO NOTHING
@@ -485,6 +539,8 @@ export const initializeAuthCore = async () => {
           seed.profile.gender,
           seed.profile.school,
           seed.profile.className,
+          seed.profile.teacherType || '',
+          seed.profile.subject || '',
         ],
       );
     }
@@ -537,6 +593,19 @@ export const registerAccount = async (payload: RegisterInput): Promise<ApiUser> 
     throw new AuthHttpError(409, 'AUTH_USERNAME_EXISTS', 'Ten dang nhap da ton tai.');
   }
 
+  const requestedTeacherType = payload.profile.teacherType;
+  const teacherType: TeacherType = payload.role === 'teacher'
+    ? (requestedTeacherType === 'homeroom' || requestedTeacherType === 'subject'
+      ? requestedTeacherType
+      : (payload.profile.className ? 'homeroom' : 'subject'))
+    : '';
+  const normalizedClassName = payload.role === 'teacher' && teacherType === 'subject'
+    ? ''
+    : (payload.profile.className || '');
+  const normalizedSubject = payload.role === 'teacher' && teacherType === 'subject'
+    ? (payload.profile.subject || '')
+    : '';
+
   const account: StoredAccount = {
     id: `acc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     username: normalizedUsername,
@@ -549,7 +618,9 @@ export const registerAccount = async (payload: RegisterInput): Promise<ApiUser> 
       birthYear: payload.profile.birthYear || '',
       gender: payload.profile.gender || '',
       school: payload.profile.school || '',
-      className: payload.profile.className || '',
+      className: normalizedClassName,
+      teacherType,
+      subject: normalizedSubject,
     },
   };
 
@@ -633,5 +704,4 @@ export const logoutToken = async (token: string | null) => {
   if (!payload) return;
   await revokeSession(payload.jti);
 };
-
 

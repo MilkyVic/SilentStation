@@ -620,7 +620,7 @@ const AccountView = ({
               </button>
             </div>
 
-            {userData.role === 'Giáo viên' && (
+            {userData.role === 'Giáo viên' && (userData.teacherType === 'homeroom' || (!userData.teacherType && userData.className)) && (
               <div className="pt-8 border-t border-gray-100">
                 <h4 className="text-lg font-bold text-brand-primary mb-4">Mã đăng ký lớp học</h4>
                 <p className="text-sm text-gray-500 mb-6">Tạo mã để học sinh có thể đăng ký vào lớp của bạn. Mã sẽ hết hạn sau 1 phút.</p>
@@ -1452,8 +1452,8 @@ const AdminPasswordPromptModal = ({
 
 const ClassListView = ({ 
   classes, 
-  students,
-  teachers,
+  students, 
+  teachers, 
   onBack,
   onViewClass,
   userData,
@@ -2387,12 +2387,14 @@ const ManagementLayout = ({
   const menuItems = userData.role === 'Admin' ? [
     { id: 'admin', label: 'Bảng điều khiển', icon: <LayoutDashboard size={20} /> },
     { id: 'class-list', label: 'Lớp học', icon: <School size={20} /> },
+    { id: 'teacher-list', label: 'Giáo viên', icon: <Users size={20} /> },
     { id: 'test-list', label: 'Quản lý bài test', icon: <Zap size={20} /> },
     { id: 'reports', label: 'Báo cáo kết quả', icon: <BarChart3 size={20} /> },
     { id: 'settings', label: 'Cài đặt', icon: <Settings size={20} /> },
   ] : [
     { id: userData.role === 'Quản trị viên cấp cao' ? 'superadmin' : 'admin', label: 'Bảng điều khiển', icon: <LayoutDashboard size={20} /> },
-    { id: 'class-list', label: 'Trường học', icon: <School size={20} /> },
+    { id: 'school-list', label: 'Trường học', icon: <School size={20} /> },
+    { id: 'teacher-list', label: 'Giáo viên', icon: <Users size={20} /> },
     { id: 'test-list', label: 'Bài test', icon: <Zap size={20} /> },
     { id: 'settings', label: 'Cài đặt', icon: <Settings size={20} /> },
   ];
@@ -2574,7 +2576,7 @@ const SuperAdminView = ({
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-12">
           {[
             { label: 'Học sinh', value: '5,909', icon: <GraduationCap />, color: "bg-brand-primary/10", textColor: "text-brand-primary", view: 'class-list' },
-            { label: 'Giáo viên', value: teachers.length, icon: <Users />, color: "bg-brand-orange/10", textColor: "text-brand-orange", view: 'class-list' },
+            { label: 'Giáo viên', value: teachers.length, icon: <Users />, color: "bg-brand-orange/10", textColor: "text-brand-orange", view: 'teacher-list' },
             { label: 'Trường học', value: schools.length, icon: <School />, color: "bg-brand-secondary/10", textColor: "text-brand-secondary", view: 'school-list' },
             { label: 'Admins', value: admins.length, icon: <User />, color: "bg-red-50", textColor: "text-red-500", view: 'admin-list' },
           ].map((stat, i) => (
@@ -2943,6 +2945,207 @@ const TeacherClassView = ({
   );
 };
 
+const TeacherListView = ({ 
+  teachers, 
+  onBack,
+  onViewTeacher,
+  userData,
+  setCurrentView,
+  onLogout,
+  setFilterSchoolId
+}: { 
+  teachers: any[], 
+  onBack: () => void,
+  onViewTeacher: (teacher: any) => void,
+  userData: any,
+  setCurrentView: (view: View) => void,
+  onLogout: () => void,
+  setFilterSchoolId: (id: string | null) => void
+}) => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [schoolFilter, setSchoolFilter] = useState('all');
+  const [teacherTypeFilter, setTeacherTypeFilter] = useState<'all' | 'homeroom' | 'subject'>('all');
+
+  const resolveTeacherType = (teacher: any) => {
+    if (teacher.teacherType === 'homeroom' || teacher.teacherType === 'subject') {
+      return teacher.teacherType;
+    }
+    return teacher.className?.trim() ? 'homeroom' : 'subject';
+  };
+
+  const schoolOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          teachers
+            .map((teacher) => (teacher.school || '').trim())
+            .filter((schoolName) => schoolName.length > 0),
+        ),
+      ).sort((a, b) => a.localeCompare(b, 'vi')),
+    [teachers],
+  );
+
+  const teacherStats = useMemo(() => {
+    const homeroomCount = teachers.filter((teacher) => resolveTeacherType(teacher) === 'homeroom').length;
+    return {
+      total: teachers.length,
+      homeroom: homeroomCount,
+      subject: teachers.length - homeroomCount,
+    };
+  }, [teachers]);
+
+  const filteredTeachers = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+
+    return teachers.filter((teacher) => {
+      const isHomeroom = resolveTeacherType(teacher) === 'homeroom';
+      const matchesType =
+        teacherTypeFilter === 'all' ||
+        (teacherTypeFilter === 'homeroom' && isHomeroom) ||
+        (teacherTypeFilter === 'subject' && !isHomeroom);
+
+      if (!matchesType) return false;
+
+      const matchesSchool = schoolFilter === 'all' || teacher.school === schoolFilter;
+      if (!matchesSchool) return false;
+
+      if (!query) return true;
+
+      return (
+        teacher.name.toLowerCase().includes(query) ||
+        (teacher.school && teacher.school.toLowerCase().includes(query)) ||
+        (teacher.className && teacher.className.toLowerCase().includes(query)) ||
+        (teacher.subject && teacher.subject.toLowerCase().includes(query))
+      );
+    });
+  }, [searchQuery, schoolFilter, teacherTypeFilter, teachers]);
+
+  return (
+    <ManagementLayout 
+      userData={userData}
+      currentView="teacher-list"
+      setCurrentView={setCurrentView}
+      onLogout={onLogout}
+      setFilterSchoolId={setFilterSchoolId}
+    >
+      <div className="p-12">
+        <div className="flex items-center justify-between mb-12">
+          <div className="flex items-center gap-6">
+            <button 
+              onClick={onBack}
+              className="w-12 h-12 rounded-full bg-gray-50 flex items-center justify-center text-gray-400 hover:bg-brand-primary/10 hover:text-brand-primary transition-all"
+            >
+              <ArrowRight className="rotate-180" size={24} />
+            </button>
+            <div>
+              <h2 className="text-4xl font-display font-black text-brand-primary">Danh sách Giáo viên</h2>
+              <p className="text-gray-500">Quản lý và theo dõi thông tin chi tiết của tất cả giáo viên.</p>
+            </div>
+          </div>
+          <div className="hidden lg:flex items-center gap-3">
+            <span className="px-4 py-2 rounded-full bg-brand-primary/10 text-brand-primary text-[10px] font-black uppercase tracking-widest">
+              Tổng: {teacherStats.total}
+            </span>
+            <span className="px-4 py-2 rounded-full bg-brand-orange/10 text-brand-orange text-[10px] font-black uppercase tracking-widest">
+              Chủ nhiệm: {teacherStats.homeroom}
+            </span>
+            <span className="px-4 py-2 rounded-full bg-gray-100 text-gray-500 text-[10px] font-black uppercase tracking-widest">
+              Bộ môn: {teacherStats.subject}
+            </span>
+          </div>
+        </div>
+
+        <div className="bg-white p-10 rounded-[3.5rem] border border-gray-100 shadow-sm relative z-40">
+          <div className="flex items-center mb-8 bg-gray-50 p-2 rounded-3xl">
+            <Search className="text-gray-400 ml-4 mr-2" size={20} />
+            <input 
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Tìm kiếm theo tên, trường hoặc lớp..."
+              className="flex-1 bg-transparent border-none py-3 outline-none text-gray-700 font-medium"
+            />
+          </div>
+
+          <div className="flex flex-col lg:flex-row gap-4 mb-8">
+            <select
+              value={schoolFilter}
+              onChange={(e) => setSchoolFilter(e.target.value)}
+              className="px-5 py-3 rounded-2xl bg-gray-50 border border-gray-100 text-sm font-bold text-gray-600 focus:ring-2 focus:ring-brand-primary/20 outline-none"
+            >
+              <option value="all">Tất cả trường</option>
+              {schoolOptions.map((schoolName) => (
+                <option key={schoolName} value={schoolName}>
+                  {schoolName}
+                </option>
+              ))}
+            </select>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { id: 'all', label: 'Tất cả' },
+                { id: 'homeroom', label: 'Giáo viên chủ nhiệm' },
+                { id: 'subject', label: 'Giáo viên bộ môn' },
+              ].map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => setTeacherTypeFilter(item.id as 'all' | 'homeroom' | 'subject')}
+                  className={cn(
+                    'px-4 py-3 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all',
+                    teacherTypeFilter === item.id
+                      ? 'bg-brand-primary text-white shadow-lg shadow-brand-primary/20'
+                      : 'bg-gray-50 text-gray-500 hover:bg-brand-primary/10 hover:text-brand-primary',
+                  )}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {filteredTeachers.map((teacher) => (
+              <div 
+                key={teacher.id}
+                onClick={() => onViewTeacher(teacher)}
+                className="flex items-center gap-6 p-6 rounded-3xl hover:bg-gray-50 transition-all cursor-pointer border border-gray-100 shadow-sm hover:shadow-xl hover:border-brand-primary/20 group"
+              >
+                <div className="w-14 h-14 rounded-2xl bg-brand-orange/10 text-brand-orange flex items-center justify-center font-black text-xl shrink-0 group-hover:scale-110 transition-transform">
+                  {teacher.name.charAt(0)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-lg font-bold text-gray-800 truncate mb-1 group-hover:text-brand-primary transition-colors">
+                    {teacher.name}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2 mt-2">
+                    {resolveTeacherType(teacher) === 'homeroom' ? (
+                      <span className="px-3 py-1 bg-brand-primary/10 text-brand-primary text-[10px] uppercase tracking-widest rounded-full font-black">
+                        Chủ nhiệm {teacher.className}
+                      </span>
+                    ) : (
+                      <span className="px-3 py-1 bg-gray-100 text-gray-500 text-[10px] uppercase tracking-widest rounded-full font-black whitespace-nowrap">
+                        Bộ môn {teacher.subject ? `- ${teacher.subject}` : ''}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[12px] font-medium text-gray-500 truncate flex items-center gap-2 mt-2">
+                    <School size={14} /> {teacher.school}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {filteredTeachers.length === 0 && (
+            <div className="py-12 text-center text-gray-500 font-medium bg-gray-50 rounded-3xl">
+              Không tìm thấy giáo viên nào phù hợp với "{searchQuery}"
+            </div>
+          )}
+        </div>
+      </div>
+    </ManagementLayout>
+  );
+};
+
 const AdminView = ({ 
   setCurrentView, 
   pendingTeachers, 
@@ -3102,7 +3305,7 @@ const AdminView = ({
               </div>
             </div>
             <button 
-              onClick={() => setCurrentView('class-list')}
+              onClick={() => setCurrentView('teacher-list')}
               className="px-8 py-4 bg-brand-orange text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:shadow-xl transition-all"
             >
               XEM TẤT CẢ
@@ -3114,7 +3317,7 @@ const AdminView = ({
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-12">
           {[
             { label: 'Tổng số Lớp', value: classes.length, icon: <School className="text-brand-primary" />, color: "bg-brand-primary/10", view: 'class-list' },
-            { label: 'Tổng số Giáo viên', value: teachers.length, icon: <Users className="text-brand-orange" />, color: "bg-brand-orange/10", view: 'class-list' },
+            { label: 'Tổng số Giáo viên', value: teachers.length, icon: <Users className="text-brand-orange" />, color: "bg-brand-orange/10", view: 'teacher-list' },
             { label: 'Tổng số Học sinh', value: students.length, icon: <GraduationCap className="text-brand-secondary" />, color: "bg-brand-secondary/10", view: 'class-list' },
           ].map((stat, i) => (
             <div 
@@ -3502,6 +3705,7 @@ export default function App() {
   const [selectedTeacher, setSelectedTeacher] = useState<any>(null);
   const [isTeacherDetailOpen, setIsTeacherDetailOpen] = useState(false);
   const [isEditingTeacher, setIsEditingTeacher] = useState(false);
+  const [editingTeacherOriginalName, setEditingTeacherOriginalName] = useState('');
   const [adminPasswordPrompt, setAdminPasswordPrompt] = useState<{isOpen: boolean, callback: (() => void) | null}>({ isOpen: false, callback: null });
   const [filterSchoolId, setFilterSchoolId] = useState<string | null>(null);
 
@@ -3733,6 +3937,39 @@ export default function App() {
     console.log(`Changing password for user ${passwordChangeUser.id} to ${password}`);
     alert('Đổi mật khẩu thành công!');
   };
+  const handleSaveTeacherProfile = () => {
+    if (!selectedTeacher) return;
+
+    const normalizedName = (selectedTeacher.fullName || selectedTeacher.name || '').trim();
+    const nextTeacherName = normalizedName || selectedTeacher.name;
+    const previousTeacherName =
+      editingTeacherOriginalName || selectedTeacher.fullName || selectedTeacher.name;
+
+    const updatedTeacher = {
+      ...selectedTeacher,
+      name: nextTeacherName,
+      fullName: nextTeacherName,
+    };
+
+    setTeachers((prevTeachers) =>
+      prevTeachers.map((teacher) =>
+        teacher.id === updatedTeacher.id ? { ...teacher, ...updatedTeacher } : teacher,
+      ),
+    );
+
+    if (previousTeacherName && previousTeacherName !== nextTeacherName) {
+      setClasses((prevClasses) =>
+        prevClasses.map((cls) =>
+          cls.teacherName === previousTeacherName ? { ...cls, teacherName: nextTeacherName } : cls,
+        ),
+      );
+    }
+
+    setSelectedTeacher(updatedTeacher);
+    setIsEditingTeacher(false);
+    setEditingTeacherOriginalName('');
+  };
+
   const DEFAULT_USER_DATA = {
     id: 'u1',
     name: 'Người dùng Trạm an',
@@ -3745,15 +3982,32 @@ export default function App() {
     gender: '',
     school: '',
     className: '',
+    teacherType: '',
+    subject: '',
     role: 'Học sinh' as AuthRole
   };
 
   const [userData, setUserData] = useState(DEFAULT_USER_DATA);
 
-  const getDefaultViewByRole = (role: AuthRole): View => {
+  const hasAssignedClass = (className?: string) => Boolean(className?.trim());
+
+  const resolveTeacherType = (teacherType?: string, className?: string) => {
+    if (teacherType === 'homeroom' || teacherType === 'subject') return teacherType;
+    return hasAssignedClass(className) ? 'homeroom' : 'subject';
+  };
+
+  const canAccessTeacherClassView = (role: AuthRole, className?: string, teacherType?: string) => {
+    if (role !== 'Giáo viên') return false;
+    if (!hasAssignedClass(className)) return false;
+    return resolveTeacherType(teacherType, className) === 'homeroom';
+  };
+
+  const getDefaultViewByRole = (role: AuthRole, className?: string, teacherType?: string): View => {
     if (role === 'Admin') return 'admin';
     if (role === 'Quản trị viên cấp cao') return 'superadmin';
-    if (role === 'Giáo viên') return 'teacher-class';
+    if (role === 'Giáo viên') {
+      return canAccessTeacherClassView(role, className, teacherType) ? 'teacher-class' : 'home';
+    }
     return 'home';
   };
 
@@ -3767,6 +4021,8 @@ export default function App() {
     gender: account.profile.gender || '',
     school: account.profile.school || '',
     className: account.profile.className || '',
+    teacherType: account.profile.teacherType || '',
+    subject: account.profile.subject || '',
     role: account.role,
   });
 
@@ -3779,7 +4035,7 @@ export default function App() {
 
       setIsLoggedIn(true);
       setUserData(buildUserDataFromAccount(sessionAccount));
-      setCurrentView(getDefaultViewByRole(sessionAccount.role));
+      setCurrentView(getDefaultViewByRole(sessionAccount.role, sessionAccount.profile.className, sessionAccount.profile.teacherType));
     };
 
     void syncSession();
@@ -3835,6 +4091,16 @@ export default function App() {
     }
   }, [isLoggedIn, userData.role, currentView]);
 
+  useEffect(() => {
+    if (
+      isLoggedIn &&
+      !canAccessTeacherClassView(userData.role, userData.className, userData.teacherType) &&
+      currentView === 'teacher-class'
+    ) {
+      setCurrentView('home');
+    }
+  }, [isLoggedIn, userData.role, userData.className, userData.teacherType, currentView]);
+
   const userSchoolId = useMemo(() => {
     if (userData.role === 'Admin') {
       return schools.find(s => s.name === userData.school)?.id || null;
@@ -3853,8 +4119,18 @@ export default function App() {
     if (userData.role === 'Admin' && userSchoolId) {
       return teachers.filter(t => t.schoolId === userSchoolId || t.school === userData.school);
     }
+
+    if (userData.role === 'Quản trị viên cấp cao' && filterSchoolId) {
+      const selectedSchool = schools.find((school) => school.id === filterSchoolId);
+      return teachers.filter(
+        (teacher) =>
+          teacher.schoolId === filterSchoolId ||
+          (selectedSchool && teacher.school === selectedSchool.name),
+      );
+    }
+
     return teachers;
-  }, [teachers, userData, userSchoolId]);
+  }, [teachers, userData, userSchoolId, filterSchoolId, schools]);
 
   const filteredClasses = useMemo(() => {
     if (userData.role === 'Admin' && userSchoolId) {
@@ -4081,7 +4357,7 @@ export default function App() {
                   </button>
                 )}
 
-                {isLoggedIn && userData.role === 'Giáo viên' && (
+                {isLoggedIn && canAccessTeacherClassView(userData.role, userData.className, userData.teacherType) && (
                   <button 
                     onClick={() => setCurrentView('teacher-class')}
                     onMouseEnter={() => setIsHandbookHovered(false)}
@@ -4514,7 +4790,7 @@ export default function App() {
                 onLogout={handleLogout}
                 onViewTeachersOfSchool={(schoolId) => {
                   setFilterSchoolId(schoolId);
-                  setCurrentView('class-list');
+                  setCurrentView('teacher-list');
                 }}
                 onViewStudentsOfSchool={(schoolId) => {
                   setFilterSchoolId(schoolId);
@@ -4545,6 +4821,43 @@ export default function App() {
                   setFilterSchoolId(null);
                   setCurrentView(view);
                 }}
+                onLogout={handleLogout}
+                setFilterSchoolId={setFilterSchoolId}
+              />
+            </motion.div>
+          )}
+
+          {currentView === 'teacher-list' && isLoggedIn && (userData.role === 'Admin' || userData.role === 'Quản trị viên cấp cao') && (
+            <motion.div
+              key="teacher-list"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+            >
+              <TeacherListView 
+                teachers={filteredTeachers}
+                onBack={() => {
+                  if (userData.role === 'Quản trị viên cấp cao') {
+                    if (filterSchoolId) {
+                      setFilterSchoolId(null);
+                      setCurrentView('school-list');
+                    } else {
+                      setCurrentView('superadmin');
+                    }
+                  } else {
+                    setCurrentView('admin');
+                  }
+                }}
+                onViewTeacher={(teacher) => {
+                  requireAdminPassword(() => {
+                    setSelectedTeacher(teacher);
+                    setIsEditingTeacher(false);
+                    setEditingTeacherOriginalName('');
+                    setIsTeacherDetailOpen(true);
+                  });
+                }}
+                userData={userData}
+                setCurrentView={setCurrentView}
                 onLogout={handleLogout}
                 setFilterSchoolId={setFilterSchoolId}
               />
@@ -4621,7 +4934,7 @@ export default function App() {
             </motion.div>
           )}
 
-          {currentView === 'teacher-class' && isLoggedIn && userData.role === 'Giáo viên' && (
+          {currentView === 'teacher-class' && isLoggedIn && canAccessTeacherClassView(userData.role, userData.className, userData.teacherType) && (
             <motion.div
               key="teacher-class"
               initial={{ opacity: 0, y: 20 }}
@@ -4665,6 +4978,8 @@ export default function App() {
                     authService.approveTeacherAccount(teacher.username, {
                       school: teacher.school,
                       className: teacher.className,
+                      teacherType: teacher.teacherType || (teacher.className ? 'homeroom' : 'subject'),
+                      subject: teacher.subject || '',
                       name: teacher.name,
                     });
                   }
@@ -4677,6 +4992,8 @@ export default function App() {
                 onViewTeacher={(teacher) => {
                   requireAdminPassword(() => {
                     setSelectedTeacher(teacher);
+                    setIsEditingTeacher(false);
+                    setEditingTeacherOriginalName('');
                     setIsTeacherDetailOpen(true);
                   });
                 }}
@@ -4765,7 +5082,7 @@ export default function App() {
                   <div className="space-y-8 mb-16">
                     {[
                       { icon: <Phone />, label: "Hotline", value: "0975614712", color: "bg-brand-primary/10 text-brand-primary" },
-                      { icon: <Mail />, label: "Email", value: "hello@tram-an.vn", color: "bg-brand-secondary/20 text-gray-700" },
+                      { icon: <Mail />, label: "Email", value: "hello.traman@gmail.com", color: "bg-brand-secondary/20 text-gray-700" },
                       { icon: <MapPin />, label: "Địa chỉ", value: "132 Ông Ích Khiêm, Đà Nẵng", color: "bg-brand-orange/10 text-brand-orange" }
                     ].map((item, i) => (
                       <div key={i} className="flex items-center gap-6 group">
@@ -4925,13 +5242,17 @@ export default function App() {
                 teacherRegCode={teacherRegCode}
                 setTeacherRegCode={setTeacherRegCode}
                 onBack={() => {
-                  if (userData.role === 'Giáo viên') setCurrentView('teacher-class');
-                  else setCurrentView('home');
+                  setCurrentView(getDefaultViewByRole(userData.role, userData.className, userData.teacherType));
                 }}
                 onSave={(updatedData) => {
                   setUserData(updatedData);
-                  if (userData.role === 'Giáo viên') setCurrentView('teacher-class');
-                  else setCurrentView('home');
+                  setCurrentView(
+                    getDefaultViewByRole(
+                      (updatedData.role || userData.role) as AuthRole,
+                      updatedData.className,
+                      updatedData.teacherType || userData.teacherType,
+                    ),
+                  );
                 }}
               />
             )
@@ -4965,8 +5286,7 @@ export default function App() {
             ) : (
               <SettingsView 
                 onBack={() => {
-                  if (userData.role === 'Giáo viên') setCurrentView('teacher-class');
-                  else setCurrentView('home');
+                  setCurrentView(getDefaultViewByRole(userData.role, userData.className, userData.teacherType));
                 }}
                 onDeleteAccount={() => {
                   if (window.confirm('Bạn có chắc chắn muốn xóa tài khoản? Hành động này không thể hoàn tác.')) {
@@ -4989,7 +5309,7 @@ export default function App() {
               onLoginSuccess={(account) => {
                 setIsLoggedIn(true);
                 setUserData(buildUserDataFromAccount(account));
-                setCurrentView(getDefaultViewByRole(account.role));
+                setCurrentView(getDefaultViewByRole(account.role, account.profile.className, account.profile.teacherType));
               }}
             />
           )}
@@ -5011,7 +5331,7 @@ export default function App() {
                     <Phone size={12} className="text-brand-primary" /> 0975614712
                   </div>
                   <div className="flex items-center gap-1.5 text-[10px] font-bold text-gray-500">
-                    <MailIcon size={12} className="text-brand-primary" /> hello@tram-an.vn
+                    <MailIcon size={12} className="text-brand-primary" /> hello.traman@gmail.com
                   </div>
                 </div>
               </div>
@@ -5143,7 +5463,11 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setIsTeacherDetailOpen(false)}
+              onClick={() => {
+                setIsTeacherDetailOpen(false);
+                setIsEditingTeacher(false);
+                setEditingTeacherOriginalName('');
+              }}
               className="absolute inset-0 bg-black/40 backdrop-blur-sm"
             />
             <motion.div 
@@ -5157,6 +5481,7 @@ export default function App() {
                   onClick={() => {
                     setIsTeacherDetailOpen(false);
                     setIsEditingTeacher(false);
+                    setEditingTeacherOriginalName('');
                   }}
                   className="absolute top-6 right-6 p-2 hover:bg-white/10 rounded-xl transition-colors"
                 >
@@ -5283,17 +5608,17 @@ export default function App() {
                 <div className="pt-4 flex gap-4">
                   {isEditingTeacher ? (
                     <button 
-                      onClick={() => {
-                        // Save logic here if needed, for now just toggle back
-                        setIsEditingTeacher(false);
-                      }}
+                      onClick={handleSaveTeacherProfile}
                       className="flex-1 bg-brand-primary text-white py-4 rounded-2xl font-black text-sm shadow-lg shadow-brand-primary/20 hover:scale-[1.02] transition-all"
                     >
                       LƯU THAY ĐỔI
                     </button>
                   ) : (
                     <button 
-                      onClick={() => setIsEditingTeacher(true)}
+                      onClick={() => {
+                        setEditingTeacherOriginalName(selectedTeacher.fullName || selectedTeacher.name);
+                        setIsEditingTeacher(true);
+                      }}
                       className="flex-1 bg-brand-orange text-white py-4 rounded-2xl font-black text-sm shadow-lg shadow-brand-orange/20 hover:scale-[1.02] transition-all"
                     >
                       CHỈNH SỬA
@@ -5303,6 +5628,7 @@ export default function App() {
                     onClick={() => {
                       setIsTeacherDetailOpen(false);
                       setIsEditingTeacher(false);
+                      setEditingTeacherOriginalName('');
                     }}
                     className="flex-1 bg-gray-100 text-gray-600 py-4 rounded-2xl font-black text-sm hover:bg-gray-200 transition-all"
                   >
@@ -5352,3 +5678,4 @@ export default function App() {
     </div>
   );
 }
+

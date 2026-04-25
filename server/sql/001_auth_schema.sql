@@ -1,4 +1,4 @@
-﻿-- Auth schema for PostgreSQL
+-- Auth schema for PostgreSQL
 -- Apply this file manually if you want explicit SQL migration control.
 
 CREATE TABLE IF NOT EXISTS auth_users (
@@ -13,9 +13,17 @@ CREATE TABLE IF NOT EXISTS auth_users (
   profile_gender TEXT NOT NULL DEFAULT '',
   profile_school TEXT NOT NULL DEFAULT '',
   profile_class_name TEXT NOT NULL DEFAULT '',
+  profile_teacher_type TEXT NOT NULL DEFAULT '' CHECK (profile_teacher_type IN ('', 'homeroom', 'subject')),
+  profile_subject TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE auth_users
+  ADD COLUMN IF NOT EXISTS profile_teacher_type TEXT NOT NULL DEFAULT '' CHECK (profile_teacher_type IN ('', 'homeroom', 'subject'));
+
+ALTER TABLE auth_users
+  ADD COLUMN IF NOT EXISTS profile_subject TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_auth_users_username ON auth_users (username);
 
@@ -29,3 +37,4 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions (user_id);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_exp_at ON auth_sessions (exp_at);
+
