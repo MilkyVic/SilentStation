@@ -1,10 +1,17 @@
-import type {
+﻿import type {
   ApiRole,
   ApiStatus,
   AuthAccount,
+  AuthApiClassCodeCreateResponse,
+  AuthApiClassCodeListResponse,
+  AuthApiClassCodeRevokeResponse,
+  AuthApiClassCodeEventsResponse,
+  AuthApiClassCodeEvent,
+  AuthApiClassJoinCode,
   AuthApiErrorResponse,
   AuthApiSuccessResponse,
   AuthApiUser,
+  AuthApiRegisterOtpResponse,
   AuthErrorCode,
   AuthResult,
   AuthRole,
@@ -20,6 +27,8 @@ type RegisterPayload = {
   username: string;
   password: string;
   regCode?: string;
+  otpSessionId?: string;
+  otpCode?: string;
   profile: {
     name: string;
     email: string;
@@ -32,8 +41,69 @@ type RegisterPayload = {
   };
 };
 
+type ClassJoinCodeInfo = {
+  id: string;
+  className: string;
+  school: string;
+  expiresAt: string;
+  maxUses: number;
+  usedCount: number;
+  status: 'active' | 'revoked' | 'expired';
+  createdAt: string;
+  revokedAt: string | null;
+};
+
+
+type ClassJoinCodeEventInfo = {
+  id: string;
+  eventType: 'created' | 'revoked' | 'redeem_success' | 'redeem_failed';
+  actorUserId: string | null;
+  teacherId: string | null;
+  classJoinCodeId: string | null;
+  className: string;
+  school: string;
+  studentUsername: string;
+  note: string;
+  createdAt: string;
+};
+
+type RegisterOtpRequestPayload = {
+  username: string;
+  password: string;
+  role: 'student' | 'teacher';
+  regCode?: string;
+  profile: {
+    name: string;
+    email: string;
+    birthYear: string;
+    gender: string;
+    school: string;
+    className: string;
+    teacherType: 'homeroom' | 'subject' | '';
+    subject: string;
+  };
+};
+
+type CreateClassJoinCodePayload = {
+  className?: string;
+  ttlMinutes?: number;
+  maxUses?: number;
+};
+
+type ServiceResult<T> = {
+  ok: true;
+  data: T;
+} | {
+  ok: false;
+  error: {
+    code: AuthErrorCode;
+    message: string;
+  };
+};
+
 const AUTH_TOKEN_KEY = 'tram_an_auth_token';
 const AUTH_API_PREFIX = '/api/auth';
+const CLASS_CODE_API_PREFIX = '/api/class-codes';
 
 const TEST_AUTH_ACCOUNTS: AuthAccount[] = [
   {
@@ -212,6 +282,30 @@ const mapApiUserToAccount = (user: AuthApiUser, password = ''): AuthAccount => {
   };
 };
 
+const mapClassJoinCode = (item: AuthApiClassJoinCode) => ({
+  id: item.id,
+  className: item.className,
+  school: item.school,
+  expiresAt: item.expiresAt,
+  maxUses: item.maxUses,
+  usedCount: item.usedCount,
+  status: item.status,
+  createdAt: item.createdAt,
+  revokedAt: item.revokedAt,
+});
+
+const mapClassJoinCodeEvent = (item: AuthApiClassCodeEvent): ClassJoinCodeEventInfo => ({
+  id: item.id,
+  eventType: item.eventType,
+  actorUserId: item.actorUserId,
+  teacherId: item.teacherId,
+  classJoinCodeId: item.classJoinCodeId,
+  className: item.className,
+  school: item.school,
+  studentUsername: item.studentUsername,
+  note: item.note,
+  createdAt: item.createdAt,
+});
 const isBrowser = () => typeof window !== 'undefined';
 
 const getAuthApiBaseUrl = () => {
@@ -246,7 +340,7 @@ const setStoredToken = (token: string | null) => {
   window.localStorage.setItem(AUTH_TOKEN_KEY, token);
 };
 
-const parseApiResponse = (
+const parseAuthApiResponse = (
   payload: unknown,
 ): AuthApiSuccessResponse | AuthApiErrorResponse | null => {
   if (!payload || typeof payload !== 'object' || !('ok' in payload)) {
@@ -255,22 +349,99 @@ const parseApiResponse = (
   return payload as AuthApiSuccessResponse | AuthApiErrorResponse;
 };
 
-const callAuthApi = async (
-  path: string,
-  init?: RequestInit,
-): Promise<AuthApiSuccessResponse | AuthApiErrorResponse | null> => {
+const parseClassCodeCreateResponse = (
+  payload: unknown,
+): AuthApiClassCodeCreateResponse | AuthApiErrorResponse | null => {
+  if (!payload || typeof payload !== 'object' || !('ok' in payload)) {
+    return null;
+  }
+
+  if ('error' in payload) return payload as AuthApiErrorResponse;
+
+  if ('code' in payload && 'data' in payload) {
+    return payload as AuthApiClassCodeCreateResponse;
+  }
+
+  return null;
+};
+
+const parseClassCodeListResponse = (
+  payload: unknown,
+): AuthApiClassCodeListResponse | AuthApiErrorResponse | null => {
+  if (!payload || typeof payload !== 'object' || !('ok' in payload)) {
+    return null;
+  }
+
+  if ('error' in payload) return payload as AuthApiErrorResponse;
+
+  if ('codes' in payload) {
+    return payload as AuthApiClassCodeListResponse;
+  }
+
+  return null;
+};
+
+
+const parseClassCodeEventsResponse = (
+  payload: unknown,
+): AuthApiClassCodeEventsResponse | AuthApiErrorResponse | null => {
+  if (!payload || typeof payload !== 'object' || !('ok' in payload)) {
+    return null;
+  }
+
+  if ('error' in payload) return payload as AuthApiErrorResponse;
+
+  if ('events' in payload) {
+    return payload as AuthApiClassCodeEventsResponse;
+  }
+
+  return null;
+};
+
+
+const parseRegisterOtpResponse = (
+  payload: unknown,
+): AuthApiRegisterOtpResponse | AuthApiErrorResponse | null => {
+  if (!payload || typeof payload !== 'object' || !('ok' in payload)) {
+    return null;
+  }
+
+  if ('error' in payload) return payload as AuthApiErrorResponse;
+
+  if ('otpSessionId' in payload && 'expiresAt' in payload && 'delivery' in payload) {
+    return payload as AuthApiRegisterOtpResponse;
+  }
+
+  return null;
+};const parseClassCodeRevokeResponse = (
+  payload: unknown,
+): AuthApiClassCodeRevokeResponse | AuthApiErrorResponse | null => {
+  if (!payload || typeof payload !== 'object' || !('ok' in payload)) {
+    return null;
+  }
+
+  if ('error' in payload) return payload as AuthApiErrorResponse;
+
+  if ('code' in payload) {
+    return payload as AuthApiClassCodeRevokeResponse;
+  }
+
+  return null;
+};
+
+const callApi = async (url: string, init?: RequestInit): Promise<unknown | null> => {
   if (!isBrowser()) return null;
 
   try {
-    const response = await fetch(buildAuthApiUrl(path), {
+    const response = await fetch(url, {
       ...init,
       headers: {
         'Content-Type': 'application/json',
         ...(init?.headers || {}),
       },
     });
-    const body = parseApiResponse(await response.json().catch(() => null));
 
+    const body = await response.json().catch(() => null);
     if (body) {
       return body;
     }
@@ -291,6 +462,19 @@ const callAuthApi = async (
   return null;
 };
 
+const callAuthApi = async (
+  path: string,
+  init?: RequestInit,
+): Promise<AuthApiSuccessResponse | AuthApiErrorResponse | null> => {
+  const payload = await callApi(buildAuthApiUrl(path), init);
+  return parseAuthApiResponse(payload);
+};
+
+const buildClassCodeApiUrl = (path: string) => `${getAuthApiBaseUrl()}${CLASS_CODE_API_PREFIX}${path}`;
+
+const callClassCodeApi = async (path: string, init?: RequestInit): Promise<unknown | null> => {
+  return callApi(buildClassCodeApiUrl(path), init);
+};
 const localRegisterStudent = (payload: RegisterPayload): AuthResult => {
   if (findAccount(payload.username)) {
     return makeError('AUTH_USERNAME_EXISTS', 'Tên đăng nhập đã tồn tại.');
@@ -344,6 +528,39 @@ export const authService = {
     return findAccount(username) || null;
   },
 
+
+  async requestRegisterOtp(payload: RegisterOtpRequestPayload): Promise<ServiceResult<{ otpSessionId: string; expiresAt: string; delivery: 'gmail' | 'dev_console'; devOtpCode?: string }>> {
+    const rawPayload = await callAuthApi('/otp/request-register', {
+      method: 'POST',
+      body: JSON.stringify({
+        username: normalizeUsername(payload.username),
+        password: payload.password,
+        role: payload.role,
+        regCode: payload.regCode,
+        profile: payload.profile,
+      }),
+    });
+
+    const apiResult = parseRegisterOtpResponse(rawPayload);
+    if (!apiResult) {
+      return makeError('AUTH_SERVER_ERROR', 'Không kết nối được máy chủ OTP.') as ServiceResult<{ otpSessionId: string; expiresAt: string; delivery: 'gmail' | 'dev_console'; devOtpCode?: string }>;
+    }
+
+    if ('error' in apiResult) {
+      return { ok: false, error: apiResult.error };
+    }
+
+    return {
+      ok: true,
+      data: {
+        otpSessionId: apiResult.otpSessionId,
+        expiresAt: apiResult.expiresAt,
+        delivery: apiResult.delivery,
+        devOtpCode: apiResult.devOtpCode,
+      },
+    };
+  },
+
   async registerStudent(payload: RegisterPayload): Promise<AuthResult> {
     const apiResult = await callAuthApi('/register', {
       method: 'POST',
@@ -352,6 +569,8 @@ export const authService = {
         password: payload.password,
         role: 'student',
         regCode: payload.regCode,
+        otpSessionId: payload.otpSessionId,
+        otpCode: payload.otpCode,
         profile: {
           ...payload.profile,
           teacherType: '',
@@ -381,6 +600,8 @@ export const authService = {
         username: normalizeUsername(payload.username),
         password: payload.password,
         role: 'teacher',
+        otpSessionId: payload.otpSessionId,
+        otpCode: payload.otpCode,
         profile: {
           ...payload.profile,
           teacherType: payload.profile.teacherType || (payload.profile.className ? 'homeroom' : 'subject'),
@@ -485,6 +706,123 @@ export const authService = {
     return localGetCurrentSession();
   },
 
+  async createClassJoinCode(
+    payload: CreateClassJoinCodePayload = {},
+  ): Promise<ServiceResult<{ code: string; info: ClassJoinCodeInfo }>> {
+    const token = getStoredToken();
+    if (!token) {
+      return makeError('AUTH_INVALID_CREDENTIALS', 'Phiên đăng nhập không hợp lệ.') as ServiceResult<{ code: string; info: ClassJoinCodeInfo }>;
+    }
+
+    const rawPayload = await callClassCodeApi('/create', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const apiResult = parseClassCodeCreateResponse(rawPayload);
+    if (!apiResult) {
+      return makeError('AUTH_SERVER_ERROR', 'Không kết nối được máy chủ tạo mã lớp.') as ServiceResult<{ code: string; info: ClassJoinCodeInfo }>;
+    }
+
+    if ('error' in apiResult) {
+      return { ok: false, error: apiResult.error };
+    }
+
+    return {
+      ok: true,
+      data: {
+        code: apiResult.code,
+        info: mapClassJoinCode(apiResult.data),
+      },
+    };
+  },
+
+  async listActiveClassJoinCodes(): Promise<ServiceResult<ClassJoinCodeInfo[]>> {
+    const token = getStoredToken();
+    if (!token) {
+      return makeError('AUTH_INVALID_CREDENTIALS', 'Phiên đăng nhập không hợp lệ.') as ServiceResult<ClassJoinCodeInfo[]>;
+    }
+
+    const rawPayload = await callClassCodeApi('/active', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const apiResult = parseClassCodeListResponse(rawPayload);
+    if (!apiResult) {
+      return makeError('AUTH_SERVER_ERROR', 'Không kết nối được máy chủ mã lớp.') as ServiceResult<ClassJoinCodeInfo[]>;
+    }
+
+    if ('error' in apiResult) {
+      return { ok: false, error: apiResult.error };
+    }
+
+    return {
+      ok: true,
+      data: apiResult.codes.map(mapClassJoinCode),
+    };
+  },
+
+  async listClassJoinCodeEvents(limit = 50): Promise<ServiceResult<ClassJoinCodeEventInfo[]>> {
+    const token = getStoredToken();
+    if (!token) {
+      return makeError('AUTH_INVALID_CREDENTIALS', 'Phiên đăng nhập không hợp lệ.') as ServiceResult<ClassJoinCodeEventInfo[]>;
+    }
+
+    const rawPayload = await callClassCodeApi(`/events?limit=${Math.min(Math.max(limit, 1), 200)}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const apiResult = parseClassCodeEventsResponse(rawPayload);
+    if (!apiResult) {
+      return makeError('AUTH_SERVER_ERROR', 'Không kết nối được máy chủ lịch sử mã lớp.') as ServiceResult<ClassJoinCodeEventInfo[]>;
+    }
+
+    if ('error' in apiResult) {
+      return { ok: false, error: apiResult.error };
+    }
+
+    return {
+      ok: true,
+      data: apiResult.events.map(mapClassJoinCodeEvent),
+    };
+  },
+  async revokeClassJoinCode(id: string): Promise<ServiceResult<ClassJoinCodeInfo>> {
+    const token = getStoredToken();
+    if (!token) {
+      return makeError('AUTH_INVALID_CREDENTIALS', 'Phiên đăng nhập không hợp lệ.') as ServiceResult<ClassJoinCodeInfo>;
+    }
+
+    const rawPayload = await callClassCodeApi('/revoke', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ id }),
+    });
+
+    const apiResult = parseClassCodeRevokeResponse(rawPayload);
+    if (!apiResult) {
+      return makeError('AUTH_SERVER_ERROR', 'Không kết nối được máy chủ thu hồi mã lớp.') as ServiceResult<ClassJoinCodeInfo>;
+    }
+
+    if ('error' in apiResult) {
+      return { ok: false, error: apiResult.error };
+    }
+
+    return {
+      ok: true,
+      data: mapClassJoinCode(apiResult.code),
+    };
+  },
   approveTeacherAccount(
     username: string,
     profileUpdates?: Partial<AuthAccount['profile']>,
@@ -518,4 +856,11 @@ export const authService = {
     setStoredToken(null);
   },
 };
+
+
+
+
+
+
+
 

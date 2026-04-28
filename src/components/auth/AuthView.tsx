@@ -1,4 +1,4 @@
-import { useState } from 'react';
+﻿import { useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import { ArrowRight, BookOpen, Clock, GraduationCap, Lock, Mail, School, Sparkles, User, Users } from 'lucide-react';
 import { cn } from '../../lib/utils';
@@ -15,22 +15,48 @@ type AuthViewProps = {
   onLoginSuccess: (account: AuthAccount) => void;
 };
 
-const STUDENT_ROLE = 'H\u1ECDc sinh' as AuthRole;
-const TEACHER_ROLE = 'Gi\u00E1o vi\u00EAn' as AuthRole;
+type RegisterRole = 'student' | 'teacher';
 
-const getAuthErrorMessage = (
-  result: AuthResult,
-  fallback: string,
-) => {
-  if ('error' in result) {
-    return result.error.message || fallback;
-  }
+type AuthFormState = {
+  username: string;
+  password: string;
+  fullName: string;
+  email: string;
+  birthYear: string;
+  gender: string;
+  school: string;
+  className: string;
+  teacherType: 'homeroom' | 'subject';
+  subject: string;
+  role: AuthRole;
+  regCode: string;
+};
 
+const STUDENT_ROLE = 'Học sinh' as AuthRole;
+const TEACHER_ROLE = 'Giáo viên' as AuthRole;
+
+const getAuthErrorMessage = (result: AuthResult, fallback: string) => {
+  if ('error' in result) return result.error.message || fallback;
   return fallback;
 };
 
+const buildInitialForm = (): AuthFormState => ({
+  username: '',
+  password: '',
+  fullName: '',
+  email: '',
+  birthYear: '',
+  gender: '',
+  school: '',
+  className: '',
+  teacherType: 'homeroom',
+  subject: '',
+  role: STUDENT_ROLE,
+  regCode: '',
+});
+
 export default function AuthView({
-  teacherRegCode,
+  teacherRegCode: _teacherRegCode,
   schools,
   onBack,
   onTeacherPending,
@@ -40,20 +66,83 @@ export default function AuthView({
   const [verificationStep, setVerificationStep] = useState<'none' | 'success'>('none');
   const [regError, setRegError] = useState<string | null>(null);
   const [regSuccess, setRegSuccess] = useState<string | null>(null);
-  const [authForm, setAuthForm] = useState({
-    username: '',
-    password: '',
-    fullName: '',
-    email: '',
-    birthYear: '',
-    gender: '',
-    school: '',
-    className: '',
-    teacherType: 'homeroom' as 'homeroom' | 'subject',
-    subject: '',
-    role: STUDENT_ROLE,
-    regCode: '',
+  const [authForm, setAuthForm] = useState<AuthFormState>(buildInitialForm());
+
+  const [otpSessionId, setOtpSessionId] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [otpDelivery, setOtpDelivery] = useState<'gmail' | 'dev_console' | null>(null);
+  const [otpExpiresAt, setOtpExpiresAt] = useState<number | null>(null);
+  const [devOtpCode, setDevOtpCode] = useState<string | null>(null);
+
+  const otpExpiryDisplay = useMemo(() => {
+    if (!otpExpiresAt) return null;
+    return new Date(otpExpiresAt).toLocaleTimeString();
+  }, [otpExpiresAt]);
+
+  const resetOtpState = () => {
+    setOtpSessionId('');
+    setOtpCode('');
+    setOtpDelivery(null);
+    setOtpExpiresAt(null);
+    setDevOtpCode(null);
+  };
+
+  const resetMessages = () => {
+    setRegError(null);
+    setRegSuccess(null);
+  };
+
+  const buildBaseProfile = (normalizedUsername: string) => ({
+    name: authForm.fullName || authForm.username,
+    email: authForm.email || `${normalizedUsername}@tram-an.vn`,
+    birthYear: authForm.birthYear || '',
+    gender: authForm.gender || '',
+    school: authForm.school,
+    className: authForm.className || '',
+    teacherType: authForm.teacherType,
+    subject: authForm.subject || '',
   });
+
+  const requestOtpForRegister = async (
+    role: RegisterRole,
+    normalizedUsername: string,
+    regCode?: string,
+    className?: string,
+    subject?: string,
+  ) => {
+    const baseProfile = buildBaseProfile(normalizedUsername);
+
+    const otpResult = await authService.requestRegisterOtp({
+      username: normalizedUsername,
+      password: authForm.password,
+      role,
+      regCode,
+      profile: {
+        ...baseProfile,
+        className: className ?? baseProfile.className,
+        teacherType: role === 'teacher' ? baseProfile.teacherType : '',
+        subject: role === 'teacher' ? (subject ?? baseProfile.subject) : '',
+      },
+    });
+
+    if ('error' in otpResult) {
+      setRegError(otpResult.error.message || 'Không thể gửi OTP.');
+      return false;
+    }
+
+    setOtpSessionId(otpResult.data.otpSessionId);
+    setOtpDelivery(otpResult.data.delivery);
+    setOtpExpiresAt(new Date(otpResult.data.expiresAt).getTime());
+    setDevOtpCode(otpResult.data.devOtpCode || null);
+
+    setRegSuccess(
+      otpResult.data.devOtpCode
+        ? `Đã gửi OTP. Mã dev: ${otpResult.data.devOtpCode}`
+        : 'Đã gửi OTP qua email của bạn.',
+    );
+
+    return true;
+  };
 
   return (
     <motion.div
@@ -77,6 +166,7 @@ export default function AuthView({
           >
             <ArrowRight size={20} className="rotate-180" />
           </button>
+
           <h2 className="text-4xl font-serif italic text-brand-primary mb-2">
             {verificationStep === 'success'
               ? 'Đăng ký thành công'
@@ -84,6 +174,7 @@ export default function AuthView({
                 ? 'Chào mừng trở lại'
                 : 'Tạo tài khoản'}
           </h2>
+
           <p className="text-gray-500 text-sm">
             {verificationStep === 'success'
               ? 'Tài khoản của bạn đã sẵn sàng để sử dụng.'
@@ -98,17 +189,19 @@ export default function AuthView({
             <div className="w-24 h-24 bg-green-50 text-green-500 rounded-[2rem] flex items-center justify-center mx-auto shadow-lg shadow-green-500/10">
               <Sparkles size={48} />
             </div>
+
             <div className="space-y-2">
               <h3 className="text-2xl font-bold text-gray-800">Hoàn tất</h3>
-              <p className="text-gray-500 text-sm leading-relaxed">
-                Bạn có thể đăng nhập ngay với tài khoản vừa tạo.
-              </p>
+              <p className="text-gray-500 text-sm leading-relaxed">Bạn có thể đăng nhập ngay với tài khoản vừa tạo.</p>
             </div>
+
             <button
               onClick={() => {
                 setVerificationStep('none');
                 setAuthMode('login');
-                setAuthForm({ ...authForm, password: '', regCode: '' });
+                resetMessages();
+                resetOtpState();
+                setAuthForm((prev) => ({ ...prev, password: '', regCode: '' }));
               }}
               className="w-full bg-brand-primary text-white py-5 rounded-2xl font-black text-sm hover:shadow-2xl hover:shadow-brand-primary/30 transition-all"
             >
@@ -121,8 +214,7 @@ export default function AuthView({
               className="space-y-5"
               onSubmit={async (e) => {
                 e.preventDefault();
-                setRegError(null);
-                setRegSuccess(null);
+                resetMessages();
 
                 const normalizedUsername = authForm.username.trim().toLowerCase();
                 if (!normalizedUsername) {
@@ -131,34 +223,33 @@ export default function AuthView({
                 }
 
                 if (authMode === 'register') {
+                  const baseProfile = buildBaseProfile(normalizedUsername);
+
                   if (authForm.role === STUDENT_ROLE) {
-                    if (!authForm.regCode) {
+                    if (!authForm.regCode.trim()) {
                       setRegError('Vui lòng nhập mã đăng ký học sinh.');
                       return;
                     }
 
-                    if (
-                      !teacherRegCode ||
-                      authForm.regCode !== teacherRegCode.code ||
-                      Date.now() > teacherRegCode.expiry
-                    ) {
-                      setRegError('Mã đăng ký không hợp lệ hoặc đã hết hạn.');
+                    if (!otpSessionId) {
+                      await requestOtpForRegister('student', normalizedUsername, authForm.regCode.trim(), '', '');
                       return;
                     }
 
-                    const assignedClassName =
-                      teacherRegCode.className || authForm.className || 'Lớp mặc định';
+                    if (!otpCode.trim()) {
+                      setRegError('Vui lòng nhập mã OTP đã nhận qua email.');
+                      return;
+                    }
+
                     const studentRegistration = await authService.registerStudent({
                       username: normalizedUsername,
                       password: authForm.password,
-                      regCode: authForm.regCode,
+                      regCode: authForm.regCode.trim(),
+                      otpSessionId,
+                      otpCode: otpCode.trim(),
                       profile: {
-                        name: authForm.fullName || authForm.username,
-                        email: authForm.email || `${normalizedUsername}@tram-an.vn`,
-                        birthYear: authForm.birthYear || '',
-                        gender: authForm.gender || '',
-                        school: authForm.school,
-                        className: assignedClassName,
+                        ...baseProfile,
+                        className: '',
                         teacherType: '',
                         subject: '',
                       },
@@ -169,55 +260,53 @@ export default function AuthView({
                       return;
                     }
 
+                    resetOtpState();
                     setVerificationStep('success');
                     return;
                   }
 
                   if (authForm.role === TEACHER_ROLE) {
                     if (authForm.teacherType !== 'homeroom' && authForm.teacherType !== 'subject') {
-                      setRegError('Vui long chon loai giao vien.');
+                      setRegError('Vui lòng chọn loại giáo viên.');
                       return;
                     }
 
-                    if (authForm.teacherType === 'homeroom' && !authForm.className.trim()) {
-                      setRegError('Vui long nhap lop chu nhiem.');
+                    const normalizedClassName = authForm.teacherType === 'homeroom' ? authForm.className.trim() : '';
+                    const normalizedSubject = authForm.teacherType === 'subject' ? authForm.subject.trim() : '';
+
+                    if (authForm.teacherType === 'homeroom' && !normalizedClassName) {
+                      setRegError('Vui lòng nhập lớp chủ nhiệm.');
                       return;
                     }
 
-                    if (authForm.teacherType === 'subject' && !authForm.subject.trim()) {
-                      setRegError('Vui long nhap mon giang day.');
+                    if (authForm.teacherType === 'subject' && !normalizedSubject) {
+                      setRegError('Vui lòng nhập môn giảng dạy.');
                       return;
                     }
 
-                    const linkedSchoolId = schools.find((school) => school.name === authForm.school)?.id;
-                    const normalizedClassName =
-                      authForm.teacherType === 'homeroom' ? authForm.className.trim() : '';
-                    const normalizedSubject =
-                      authForm.teacherType === 'subject' ? authForm.subject.trim() : '';
+                    if (!otpSessionId) {
+                      await requestOtpForRegister(
+                        'teacher',
+                        normalizedUsername,
+                        undefined,
+                        normalizedClassName,
+                        normalizedSubject,
+                      );
+                      return;
+                    }
 
-                    const newPendingTeacher = {
-                      id: `p${Date.now()}`,
-                      name: authForm.fullName || authForm.username,
-                      fullName: authForm.fullName || authForm.username,
-                      school: authForm.school,
-                      schoolId: linkedSchoolId,
-                      username: normalizedUsername,
-                      className: normalizedClassName,
-                      teacherType: authForm.teacherType,
-                      subject: normalizedSubject,
-                      role: TEACHER_ROLE,
-                      timestamp: Date.now(),
-                    };
+                    if (!otpCode.trim()) {
+                      setRegError('Vui lòng nhập mã OTP đã nhận qua email.');
+                      return;
+                    }
 
                     const teacherRegistration = await authService.registerTeacherPending({
                       username: normalizedUsername,
                       password: authForm.password,
+                      otpSessionId,
+                      otpCode: otpCode.trim(),
                       profile: {
-                        name: authForm.fullName || authForm.username,
-                        email: authForm.email || `${normalizedUsername}@tram-an.vn`,
-                        birthYear: authForm.birthYear || '',
-                        gender: authForm.gender || '',
-                        school: authForm.school,
+                        ...baseProfile,
                         className: normalizedClassName,
                         teacherType: authForm.teacherType,
                         subject: normalizedSubject,
@@ -229,8 +318,23 @@ export default function AuthView({
                       return;
                     }
 
+                    const linkedSchoolId = schools.find((school) => school.name === authForm.school)?.id;
+                    onTeacherPending({
+                      id: `p${Date.now()}`,
+                      name: authForm.fullName || authForm.username,
+                      fullName: authForm.fullName || authForm.username,
+                      school: authForm.school,
+                      schoolId: linkedSchoolId,
+                      username: normalizedUsername,
+                      className: normalizedClassName,
+                      teacherType: authForm.teacherType,
+                      subject: normalizedSubject,
+                      role: TEACHER_ROLE,
+                      timestamp: Date.now(),
+                    });
+
+                    resetOtpState();
                     setRegSuccess('Yêu cầu đăng ký đã được gửi. Vui lòng chờ Admin phê duyệt.');
-                    onTeacherPending(newPendingTeacher);
                     setAuthMode('login');
                     return;
                   }
@@ -261,6 +365,7 @@ export default function AuthView({
                   {regError}
                 </motion.div>
               )}
+
               {regSuccess && (
                 <motion.div
                   initial={{ opacity: 0, y: -10 }}
@@ -273,23 +378,24 @@ export default function AuthView({
 
               {authMode === 'register' && (
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">
-                    Vai trò
-                  </label>
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Vai trò</label>
                   <div className="flex flex-wrap gap-4">
                     {[STUDENT_ROLE, TEACHER_ROLE].map((role) => (
                       <button
                         key={role}
                         type="button"
-                        onClick={() =>
-                          setAuthForm({
-                            ...authForm,
+                        onClick={() => {
+                          resetMessages();
+                          resetOtpState();
+                          setAuthForm((prev) => ({
+                            ...prev,
                             role,
-                            teacherType: role === TEACHER_ROLE ? authForm.teacherType : 'homeroom',
-                            subject: role === TEACHER_ROLE ? authForm.subject : '',
-                            className: role === TEACHER_ROLE ? authForm.className : '',
-                          })
-                        }
+                            teacherType: role === TEACHER_ROLE ? prev.teacherType : 'homeroom',
+                            subject: role === TEACHER_ROLE ? prev.subject : '',
+                            className: role === TEACHER_ROLE ? prev.className : '',
+                            regCode: role === STUDENT_ROLE ? prev.regCode : '',
+                          }));
+                        }}
                         className={cn(
                           'flex-1 py-3 rounded-2xl text-xs font-black uppercase tracking-widest transition-all',
                           authForm.role === role
@@ -301,6 +407,7 @@ export default function AuthView({
                       </button>
                     ))}
                   </div>
+
                   {authForm.role === TEACHER_ROLE && (
                     <motion.p
                       initial={{ opacity: 0, y: -10 }}
@@ -314,16 +421,14 @@ export default function AuthView({
               )}
 
               <div className="space-y-2">
-                <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">
-                  Tên đăng nhập
-                </label>
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Tên đăng nhập</label>
                 <div className="relative">
                   <User className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                   <input
                     type="text"
                     required
                     value={authForm.username}
-                    onChange={(e) => setAuthForm({ ...authForm, username: e.target.value })}
+                    onChange={(e) => setAuthForm((prev) => ({ ...prev, username: e.target.value }))}
                     className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
                     placeholder="Nhập tên đăng nhập"
                   />
@@ -331,16 +436,14 @@ export default function AuthView({
               </div>
 
               <div className="space-y-2">
-                <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">
-                  Mật khẩu
-                </label>
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Mật khẩu</label>
                 <div className="relative">
                   <Lock className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                   <input
                     type="password"
                     required
                     value={authForm.password}
-                    onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+                    onChange={(e) => setAuthForm((prev) => ({ ...prev, password: e.target.value }))}
                     className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
                     placeholder="Nhập mật khẩu"
                   />
@@ -354,16 +457,14 @@ export default function AuthView({
                   className="space-y-5 pt-2"
                 >
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">
-                      Họ và tên
-                    </label>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Họ và tên</label>
                     <div className="relative">
                       <User className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                       <input
                         type="text"
                         required
                         value={authForm.fullName}
-                        onChange={(e) => setAuthForm({ ...authForm, fullName: e.target.value })}
+                        onChange={(e) => setAuthForm((prev) => ({ ...prev, fullName: e.target.value }))}
                         className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
                         placeholder="Nhập họ và tên đầy đủ"
                       />
@@ -372,31 +473,28 @@ export default function AuthView({
 
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">
-                        Năm sinh
-                      </label>
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Năm sinh</label>
                       <div className="relative">
                         <Clock className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                         <input
                           type="text"
                           required
                           value={authForm.birthYear}
-                          onChange={(e) => setAuthForm({ ...authForm, birthYear: e.target.value })}
+                          onChange={(e) => setAuthForm((prev) => ({ ...prev, birthYear: e.target.value }))}
                           className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
                           placeholder="YYYY"
                         />
                       </div>
                     </div>
+
                     <div className="space-y-2">
-                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">
-                        Giới tính
-                      </label>
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Giới tính</label>
                       <div className="relative">
                         <Users className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                         <select
                           required
                           value={authForm.gender}
-                          onChange={(e) => setAuthForm({ ...authForm, gender: e.target.value })}
+                          onChange={(e) => setAuthForm((prev) => ({ ...prev, gender: e.target.value }))}
                           className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700 appearance-none"
                         >
                           <option value="">Chọn</option>
@@ -409,16 +507,14 @@ export default function AuthView({
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">
-                      Email
-                    </label>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Email</label>
                     <div className="relative">
                       <Mail className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                       <input
                         type="email"
                         required
                         value={authForm.email}
-                        onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
+                        onChange={(e) => setAuthForm((prev) => ({ ...prev, email: e.target.value }))}
                         className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
                         placeholder="Nhập địa chỉ email"
                       />
@@ -426,16 +522,14 @@ export default function AuthView({
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">
-                      Trường
-                    </label>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Trường</label>
                     <div className="relative">
                       <School className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                       <input
                         type="text"
                         required
                         value={authForm.school}
-                        onChange={(e) => setAuthForm({ ...authForm, school: e.target.value })}
+                        onChange={(e) => setAuthForm((prev) => ({ ...prev, school: e.target.value }))}
                         className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
                         placeholder="Nhập tên trường"
                       />
@@ -445,9 +539,7 @@ export default function AuthView({
                   {authForm.role === TEACHER_ROLE && (
                     <div className="space-y-5">
                       <div className="space-y-2">
-                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">
-                          Loại giáo viên
-                        </label>
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Loại giáo viên</label>
                         <div className="flex flex-wrap gap-2">
                           {[
                             { id: 'homeroom', label: 'Giáo viên chủ nhiệm' },
@@ -456,14 +548,16 @@ export default function AuthView({
                             <button
                               key={item.id}
                               type="button"
-                              onClick={() =>
-                                setAuthForm({
-                                  ...authForm,
+                              onClick={() => {
+                                resetMessages();
+                                resetOtpState();
+                                setAuthForm((prev) => ({
+                                  ...prev,
                                   teacherType: item.id as 'homeroom' | 'subject',
-                                  className: item.id === 'homeroom' ? authForm.className : '',
-                                  subject: item.id === 'subject' ? authForm.subject : '',
-                                })
-                              }
+                                  className: item.id === 'homeroom' ? prev.className : '',
+                                  subject: item.id === 'subject' ? prev.subject : '',
+                                }));
+                              }}
                               className={cn(
                                 'px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all',
                                 authForm.teacherType === item.id
@@ -479,16 +573,14 @@ export default function AuthView({
 
                       {authForm.teacherType === 'homeroom' ? (
                         <div className="space-y-2">
-                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">
-                            Lớp chủ nhiệm
-                          </label>
+                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Lớp chủ nhiệm</label>
                           <div className="relative">
                             <GraduationCap className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                             <input
                               type="text"
                               required
                               value={authForm.className}
-                              onChange={(e) => setAuthForm({ ...authForm, className: e.target.value })}
+                              onChange={(e) => setAuthForm((prev) => ({ ...prev, className: e.target.value }))}
                               className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
                               placeholder="Nhập tên lớp"
                             />
@@ -496,16 +588,14 @@ export default function AuthView({
                         </div>
                       ) : (
                         <div className="space-y-2">
-                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">
-                            Môn giảng dạy
-                          </label>
+                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Môn giảng dạy</label>
                           <div className="relative">
                             <BookOpen className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                             <input
                               type="text"
                               required
                               value={authForm.subject}
-                              onChange={(e) => setAuthForm({ ...authForm, subject: e.target.value })}
+                              onChange={(e) => setAuthForm((prev) => ({ ...prev, subject: e.target.value }))}
                               className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
                               placeholder="VD: Toán, Ngữ văn, Tiếng Anh"
                             />
@@ -517,20 +607,53 @@ export default function AuthView({
 
                   {authForm.role === STUDENT_ROLE && (
                     <div className="space-y-2">
-                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">
-                        Mã đăng ký
-                      </label>
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Mã đăng ký</label>
                       <div className="relative">
                         <Lock className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                         <input
                           type="text"
                           required
                           value={authForm.regCode}
-                          onChange={(e) => setAuthForm({ ...authForm, regCode: e.target.value })}
+                          onChange={(e) => setAuthForm((prev) => ({ ...prev, regCode: e.target.value }))}
                           className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
                           placeholder="Nhập mã từ giáo viên"
                         />
                       </div>
+                    </div>
+                  )}
+
+                  {otpSessionId && (
+                    <div className="space-y-3 rounded-2xl border border-brand-primary/20 bg-brand-primary/5 p-4">
+                      <p className="text-[11px] font-bold text-brand-primary">
+                        Nhập mã OTP email để hoàn tất đăng ký {otpDelivery === 'gmail' ? '(đã gửi qua Gmail)' : '(chế độ dev)'}.
+                      </p>
+
+                      {otpExpiryDisplay && (
+                        <p className="text-[10px] text-gray-500">Hết hạn lúc: {otpExpiryDisplay}</p>
+                      )}
+
+                      {devOtpCode && (
+                        <p className="text-[10px] text-brand-orange font-bold">OTP dev: {devOtpCode}</p>
+                      )}
+
+                      <input
+                        type="text"
+                        value={otpCode}
+                        onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        className="w-full px-4 py-3 rounded-xl bg-white border border-gray-200 focus:ring-2 focus:ring-brand-primary/20 outline-none font-bold text-gray-700"
+                        placeholder="Nhập mã OTP email"
+                      />
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          resetOtpState();
+                          setRegSuccess('Đã reset OTP. Bấm ĐĂNG KÝ để gửi mã mới.');
+                        }}
+                        className="text-[10px] font-black uppercase tracking-widest text-brand-primary hover:underline"
+                      >
+                        Gửi lại OTP
+                      </button>
                     </div>
                   )}
                 </motion.div>
@@ -548,19 +671,17 @@ export default function AuthView({
               <button
                 onClick={() => {
                   const newMode = authMode === 'login' ? 'register' : 'login';
-                  setRegError(null);
-                  setRegSuccess(null);
+                  resetMessages();
+                  resetOtpState();
                   setAuthMode(newMode);
-                  setAuthForm({
-                    ...authForm,
+                  setAuthForm((prev) => ({
+                    ...prev,
                     password: '',
                     regCode: '',
-                    role: newMode === 'register'
-                      ? (authForm.role === TEACHER_ROLE ? TEACHER_ROLE : STUDENT_ROLE)
-                      : authForm.role,
-                    teacherType: authForm.role === TEACHER_ROLE ? authForm.teacherType : 'homeroom',
-                    subject: authForm.role === TEACHER_ROLE ? authForm.subject : '',
-                  });
+                    role: newMode === 'register' ? (prev.role === TEACHER_ROLE ? TEACHER_ROLE : STUDENT_ROLE) : prev.role,
+                    teacherType: prev.role === TEACHER_ROLE ? prev.teacherType : 'homeroom',
+                    subject: prev.role === TEACHER_ROLE ? prev.subject : '',
+                  }));
                 }}
                 className="text-xs font-bold text-brand-primary hover:underline uppercase tracking-widest"
               >
@@ -573,4 +694,5 @@ export default function AuthView({
     </motion.div>
   );
 }
+
 

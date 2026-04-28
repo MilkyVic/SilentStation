@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+﻿import React, { useState, useMemo, useEffect } from 'react';
 import { 
   BookOpen, 
   Search, 
@@ -408,16 +408,150 @@ const AccountView = ({
   const [isPhoneVerified, setIsPhoneVerified] = useState(!!userData.phoneNumber);
   
   const [tick, setTick] = useState(0);
+  const [isGeneratingCode, setIsGeneratingCode] = useState(false);
+  const [generateCodeError, setGenerateCodeError] = useState<string | null>(null);
+  const [activeCodes, setActiveCodes] = useState<Array<{ id: string; className: string; school: string; expiresAt: string; maxUses: number; usedCount: number }>>([]);
+  const [isCodesLoading, setIsCodesLoading] = useState(false);
+  const [codesError, setCodesError] = useState<string | null>(null);
+  const [revokingCodeId, setRevokingCodeId] = useState<string | null>(null);
+  const [codeEvents, setCodeEvents] = useState<Array<{ id: string; eventType: string; className: string; school: string; studentUsername: string; note: string; createdAt: string }>>([]);
+  const [isEventsLoading, setIsEventsLoading] = useState(false);
+  const [eventsError, setEventsError] = useState<string | null>(null);
+  const [eventsPage, setEventsPage] = useState(1);
 
   useEffect(() => {
     const timer = setInterval(() => setTick(t => t + 1), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  const handleGenerateCode = () => {
-    if (setTeacherRegCode) {
-      const newCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-      setTeacherRegCode({ code: newCode, expiry: Date.now() + 60000, className: userData.className });
+  const roleValue = typeof userData.role === 'string' ? userData.role : '';
+  const isTeacherRole = roleValue === 'Giáo viên';
+  const isSuperAdminRole = roleValue === 'Quản trị viên cấp cao';
+  const isHomeroomTeacher = isTeacherRole
+    && (userData.teacherType === 'homeroom' || (!userData.teacherType && userData.className));
+  const canViewCodeEvents = isHomeroomTeacher || roleValue === 'Admin' || isSuperAdminRole;
+  const eventsPageSize = 6;
+  const eventsTotalPages = Math.max(1, Math.ceil(codeEvents.length / eventsPageSize));
+  const pagedCodeEvents = codeEvents.slice(
+    (eventsPage - 1) * eventsPageSize,
+    eventsPage * eventsPageSize,
+  );
+
+  useEffect(() => {
+    if (eventsPage > eventsTotalPages) {
+      setEventsPage(eventsTotalPages);
+    }
+  }, [eventsPage, eventsTotalPages]);
+
+  const loadActiveCodes = async () => {
+    if (!isHomeroomTeacher) return;
+    setIsCodesLoading(true);
+    setCodesError(null);
+
+    const result = await authService.listActiveClassJoinCodes();
+
+    if ('error' in result) {
+      setCodesError(result.error.message || 'Không thể tải danh sách mã lớp.');
+      setIsCodesLoading(false);
+      return;
+    }
+
+    const className = (userData.className || formData.className || '').trim();
+    const nextCodes = result.data.filter((item) => !className || item.className === className);
+    setActiveCodes(nextCodes);
+    setIsCodesLoading(false);
+  };
+
+  const loadCodeEvents = async () => {
+    if (!canViewCodeEvents) return;
+    setIsEventsLoading(true);
+    setEventsError(null);
+
+    const result = await authService.listClassJoinCodeEvents(60);
+
+    if ('error' in result) {
+      setEventsError(result.error.message || 'Không thể tải lịch sử mã lớp.');
+      setIsEventsLoading(false);
+      return;
+    }
+
+    setCodeEvents(result.data);
+    setIsEventsLoading(false);
+  };
+
+  useEffect(() => {
+    if (!isHomeroomTeacher) return;
+
+    void loadActiveCodes();
+    const poll = setInterval(() => {
+      void loadActiveCodes();
+    }, 15000);
+
+    return () => clearInterval(poll);
+  }, [isHomeroomTeacher, userData.className, formData.className]);
+
+  useEffect(() => {
+    if (!canViewCodeEvents) return;
+
+    void loadCodeEvents();
+    const poll = setInterval(() => {
+      void loadCodeEvents();
+    }, 15000);
+
+    return () => clearInterval(poll);
+  }, [canViewCodeEvents]);
+
+  const handleRevokeCode = async (codeId: string) => {
+    setRevokingCodeId(codeId);
+    setCodesError(null);
+
+    const result = await authService.revokeClassJoinCode(codeId);
+
+    if ('error' in result) {
+      setCodesError(result.error.message || 'Không thể thu hồi mã lớp.');
+      setRevokingCodeId(null);
+      return;
+    }
+
+    if (teacherRegCode?.code && activeCodes.find((item) => item.id === codeId)) {
+      setTeacherRegCode?.(null);
+    }
+
+    setRevokingCodeId(null);
+    await loadActiveCodes();
+    await loadCodeEvents();
+  };
+
+  const handleGenerateCode = async () => {
+    if (!setTeacherRegCode) return;
+
+    const className = (userData.className || formData.className || '').trim();
+    if (!className) {
+      setGenerateCodeError('Không tìm thấy lớp chủ nhiệm để tạo mã.');
+      return;
+    }
+
+    setGenerateCodeError(null);
+    setIsGeneratingCode(true);
+    try {
+      const result = await authService.createClassJoinCode({ className });
+
+      if ('error' in result) {
+        setGenerateCodeError(result.error.message || 'Không thể tạo mã lớp. Vui lòng thử lại.');
+        return;
+      }
+
+      const expiresAtMs = new Date(result.data.info.expiresAt).getTime();
+      setTeacherRegCode({
+        code: result.data.code,
+        expiry: Number.isFinite(expiresAtMs) ? expiresAtMs : Date.now(),
+        className: result.data.info.className,
+      });
+
+      await loadActiveCodes();
+      await loadCodeEvents();
+    } finally {
+      setIsGeneratingCode(false);
     }
   };
 
@@ -430,6 +564,31 @@ const AccountView = ({
     } else {
       alert('Mã OTP không chính xác (Mã mẫu: 123456)');
     }
+  };
+
+  const formatEventType = (eventType: string) => {
+    if (eventType === 'created') return 'Tạo mã';
+    if (eventType === 'revoked') return 'Thu hồi';
+    if (eventType === 'redeem_success') return 'Dùng mã thành công';
+    return 'Dùng mã thất bại';
+  };
+
+  const formatEventTypeClassName = (eventType: string) => {
+    if (eventType === 'created') return 'bg-brand-primary/10 text-brand-primary';
+    if (eventType === 'revoked') return 'bg-red-100 text-red-600';
+    if (eventType === 'redeem_success') return 'bg-green-100 text-green-600';
+    return 'bg-amber-100 text-amber-700';
+  };
+
+  const formatEventNote = (note: string) => {
+    if (note === 'teacher_created_code') return 'Giáo viên tạo mã mới';
+    if (note === 'manual_revoke') return 'Thu hồi thủ công';
+    if (note === 'student_registered') return 'Học sinh đăng ký thành công';
+    if (note === 'invalid_code_not_found') return 'Mã không tồn tại';
+    if (note === 'expired') return 'Mã đã hết hạn';
+    if (note === 'max_uses_reached') return 'Mã đã hết lượt sử dụng';
+    if (note === 'inactive_status') return 'Mã đã bị vô hiệu hóa';
+    return note || 'Không có ghi chú';
   };
 
   return (
@@ -620,17 +779,26 @@ const AccountView = ({
               </button>
             </div>
 
-            {userData.role === 'Giáo viên' && (userData.teacherType === 'homeroom' || (!userData.teacherType && userData.className)) && (
+            {isHomeroomTeacher && (
               <div className="pt-8 border-t border-gray-100">
                 <h4 className="text-lg font-bold text-brand-primary mb-4">Mã đăng ký lớp học</h4>
-                <p className="text-sm text-gray-500 mb-6">Tạo mã để học sinh có thể đăng ký vào lớp của bạn. Mã sẽ hết hạn sau 1 phút.</p>
+                <p className="text-sm text-gray-500 mb-6">Tạo mã để học sinh đăng ký vào lớp. Mã được backend quản lý và tự động hết hạn theo cấu hình hệ thống.</p>
+                <p className="text-xs text-brand-orange font-bold mb-6">Mỗi lần tạo mã mới, mã active cũ của cùng lớp sẽ tự động bị thu hồi.</p>
                 
                 <div className="flex items-center gap-4">
                   <button 
-                    onClick={handleGenerateCode}
-                    className="px-6 py-4 bg-brand-secondary/20 text-brand-secondary rounded-2xl font-bold text-sm hover:bg-brand-secondary/30 transition-colors"
+                    onClick={() => {
+                      void handleGenerateCode();
+                    }}
+                    disabled={isGeneratingCode}
+                    className={cn(
+                      'px-6 py-4 rounded-2xl font-bold text-sm transition-all shadow-lg',
+                      isGeneratingCode
+                        ? 'bg-gray-200 text-gray-500 cursor-not-allowed shadow-none'
+                        : 'bg-brand-secondary text-white hover:brightness-110 hover:shadow-xl',
+                    )}
                   >
-                    Tạo mã mới
+                    {isGeneratingCode ? 'Đang tạo...' : 'Tạo mã mới'}
                   </button>
                   
                   {teacherRegCode && teacherRegCode.expiry > Date.now() ? (
@@ -647,6 +815,153 @@ const AccountView = ({
                     </div>
                   ) : null}
                 </div>
+                {generateCodeError && (
+                  <p className="mt-4 text-sm text-red-500 font-bold">{generateCodeError}</p>
+                )}
+
+                <div className="mt-6 pt-6 border-t border-gray-100 space-y-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <h5 className="text-sm font-black text-brand-primary uppercase tracking-widest">Mã đang hiệu lực</h5>
+                    <button
+                      onClick={() => {
+                        void loadActiveCodes();
+                      }}
+                      disabled={isCodesLoading}
+                      className={cn(
+                        'px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-colors',
+                        isCodesLoading
+                          ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                          : 'bg-brand-primary/10 text-brand-primary hover:bg-brand-primary/20',
+                      )}
+                    >
+                      {isCodesLoading ? 'Đang tải...' : 'Làm mới'}
+                    </button>
+                  </div>
+
+                  {codesError && (
+                    <p className="text-sm text-red-500 font-bold">{codesError}</p>
+                  )}
+
+                  {!isCodesLoading && activeCodes.length === 0 && (
+                    <div className="bg-gray-50 border border-gray-100 rounded-2xl px-5 py-4 text-sm text-gray-500">
+                      Chưa có mã active cho lớp này.
+                    </div>
+                  )}
+
+                  {activeCodes.map((code) => {
+                    const expiresAtMs = new Date(code.expiresAt).getTime();
+                    const remainingSeconds = Math.max(0, Math.ceil((expiresAtMs - Date.now()) / 1000));
+                    const isExpired = remainingSeconds <= 0;
+
+                    return (
+                      <div key={code.id} className="bg-gray-50 border border-gray-100 rounded-2xl px-5 py-4 space-y-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-xs text-gray-500 font-bold">Lớp {code.className}</p>
+                            <p className="text-sm font-black text-brand-primary">
+                              {code.usedCount}/{code.maxUses} lượt
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => {
+                              void handleRevokeCode(code.id);
+                            }}
+                            disabled={revokingCodeId === code.id}
+                            className={cn(
+                              'px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-colors',
+                              revokingCodeId === code.id
+                                ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                                : 'bg-red-100 text-red-600 hover:bg-red-200',
+                            )}
+                          >
+                            {revokingCodeId === code.id ? 'Đang thu hồi...' : 'Thu hồi'}
+                          </button>
+                        </div>
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-gray-500">Hết hạn: {new Date(code.expiresAt).toLocaleString()}</span>
+                          <span className={cn('font-bold', isExpired ? 'text-red-500' : 'text-brand-orange')}>
+                            {isExpired ? 'Đã hết hạn' : `Còn ${remainingSeconds}s`}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {canViewCodeEvents && (
+              <div className="pt-8 border-t border-gray-100">
+                <div className="flex items-center justify-between gap-4 mb-4">
+                  <h4 className="text-lg font-bold text-brand-primary">Lịch sử mã lớp</h4>
+                  <button
+                    onClick={() => {
+                      void loadCodeEvents();
+                    }}
+                    disabled={isEventsLoading}
+                    className={cn(
+                      'px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-colors',
+                      isEventsLoading
+                        ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                        : 'bg-brand-primary/10 text-brand-primary hover:bg-brand-primary/20',
+                    )}
+                  >
+                    {isEventsLoading ? 'Đang tải...' : 'Làm mới'}
+                  </button>
+                </div>
+
+                {eventsError && (
+                  <p className="text-sm text-red-500 font-bold mb-4">{eventsError}</p>
+                )}
+
+                {!isEventsLoading && codeEvents.length === 0 && (
+                  <div className="bg-gray-50 border border-gray-100 rounded-2xl px-5 py-4 text-sm text-gray-500">
+                    Chưa có sự kiện nào.
+                  </div>
+                )}
+
+                <div className="space-y-3">
+                  {pagedCodeEvents.map((event) => (
+                    <div key={event.id} className="bg-gray-50 border border-gray-100 rounded-2xl px-5 py-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
+                        <span className={cn('px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest', formatEventTypeClassName(event.eventType))}>
+                          {formatEventType(event.eventType)}
+                        </span>
+                        <span className="text-xs text-gray-500">{new Date(event.createdAt).toLocaleString()}</span>
+                      </div>
+                      <p className="text-sm font-bold text-brand-primary">
+                        Lớp {event.className || 'N/A'} {event.school ? `- ${event.school}` : ''}
+                      </p>
+                      {event.studentUsername && (
+                        <p className="text-xs text-gray-600 mt-1">Học sinh: @{event.studentUsername}</p>
+                      )}
+                      <p className="text-xs text-gray-500 mt-1">{formatEventNote(event.note)}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {codeEvents.length > eventsPageSize && (
+                  <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                    {Array.from({ length: eventsTotalPages }, (_, index) => {
+                      const pageNumber = index + 1;
+                      const isActive = pageNumber === eventsPage;
+                      return (
+                        <button
+                          key={pageNumber}
+                          onClick={() => setEventsPage(pageNumber)}
+                          className={cn(
+                            'w-9 h-9 rounded-xl text-xs font-black transition-colors',
+                            isActive
+                              ? 'bg-brand-primary text-white'
+                              : 'bg-gray-100 text-gray-500 hover:bg-gray-200',
+                          )}
+                        >
+                          {pageNumber}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -4053,11 +4368,6 @@ export default function App() {
     setFilterSchoolId(null);
   };
 
-  const generateRegCode = () => {
-    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const expiry = Date.now() + 10 * 60 * 1000; // 10 minutes
-    setTeacherRegCode({ code, expiry });
-  };
 
   const filteredSections = useMemo(() => {
     return HANDBOOK_DATA.filter(section => 
@@ -5678,4 +5988,14 @@ export default function App() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
 

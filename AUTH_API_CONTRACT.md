@@ -1,4 +1,4 @@
-# Auth API Contract (Phase 2 -> Phase 3)
+﻿# Auth API Contract (Phase 2 -> Phase 3)
 
 This contract is the backend target for replacing frontend in-memory auth.
 
@@ -11,7 +11,7 @@ This contract is the backend target for replacing frontend in-memory auth.
 
 ## Endpoints
 
-### `POST /auth/register`
+### `POST /api/auth/register`
 
 Create a public account (`student` or `teacher` only).
 
@@ -32,15 +32,18 @@ Request body:
     "teacherType": "'' | homeroom | subject",
     "subject": "string"
   },
-  "regCode": "string (required for student)"
+  "regCode": "string (required for student)",
+  "otpSessionId": "string",
+  "otpCode": "string"
 }
 ```
 
 Rules:
 
-- `student`: `teacherType = ''`, `subject = ''`.
+- `student`: `teacherType = ''`, `subject = ''`, bắt buộc có `regCode` hợp lệ.
 - `teacher + homeroom`: should provide `className`.
 - `teacher + subject`: should provide `subject`, `className` can be empty.
+- OTP đăng ký là bắt buộc với cả học sinh và giáo viên.
 
 Success response (`201`):
 
@@ -66,16 +69,26 @@ Success response (`201`):
 }
 ```
 
-### `POST /auth/login`
+### `POST /api/auth/otp/request-register`
 
-Authenticate with username + password only.
-
-Request body:
+Request OTP for registration (student/teacher):
 
 ```json
 {
   "username": "string",
-  "password": "string"
+  "password": "string",
+  "role": "student | teacher",
+  "regCode": "string (required for student)",
+  "profile": {
+    "name": "string",
+    "email": "string",
+    "birthYear": "string",
+    "gender": "string",
+    "school": "string",
+    "className": "string",
+    "teacherType": "'' | homeroom | subject",
+    "subject": "string"
+  }
 }
 ```
 
@@ -84,70 +97,24 @@ Success response (`200`):
 ```json
 {
   "ok": true,
-  "user": {
-    "id": "string",
-    "username": "string",
-    "role": "student | teacher | admin | superadmin",
-    "status": "active | pending | suspended",
-    "profile": {
-      "name": "string",
-      "email": "string",
-      "birthYear": "string",
-      "gender": "string",
-      "school": "string",
-      "className": "string",
-      "teacherType": "'' | homeroom | subject",
-      "subject": "string"
-    }
-  },
-  "session": {
-    "tokenType": "Bearer",
-    "accessToken": "string",
-    "refreshToken": "string",
-    "expiresAt": "ISO datetime"
-  }
+  "otpSessionId": "otp-...",
+  "expiresAt": "ISO datetime",
+  "delivery": "gmail | dev_console",
+  "devOtpCode": "123456 (optional, dev only)"
 }
 ```
 
-### `POST /auth/logout`
+### `POST /api/auth/login`
+
+Authenticate with username + password only.
+
+### `POST /api/auth/logout`
 
 Invalidate current session/token.
 
-Success response (`200`):
-
-```json
-{
-  "ok": true
-}
-```
-
-### `GET /auth/me`
+### `GET /api/auth/me`
 
 Return current authenticated user + role/status.
-
-Success response (`200`):
-
-```json
-{
-  "ok": true,
-  "user": {
-    "id": "string",
-    "username": "string",
-    "role": "student | teacher | admin | superadmin",
-    "status": "active | pending | suspended",
-    "profile": {
-      "name": "string",
-      "email": "string",
-      "birthYear": "string",
-      "gender": "string",
-      "school": "string",
-      "className": "string",
-      "teacherType": "'' | homeroom | subject",
-      "subject": "string"
-    }
-  }
-}
-```
 
 ## Error Envelope
 
@@ -157,7 +124,7 @@ All auth endpoints return a consistent error body:
 {
   "ok": false,
   "error": {
-    "code": "AUTH_USERNAME_EXISTS | AUTH_INVALID_CREDENTIALS | AUTH_PENDING_APPROVAL | AUTH_INVALID_ROLE",
+    "code": "AUTH_USERNAME_EXISTS | AUTH_INVALID_CREDENTIALS | AUTH_PENDING_APPROVAL | AUTH_INVALID_ROLE | AUTH_OTP_REQUIRED | AUTH_OTP_INVALID | AUTH_OTP_EXPIRED | AUTH_OTP_RATE_LIMIT | AUTH_SERVER_ERROR",
     "message": "string"
   }
 }
@@ -183,4 +150,3 @@ Internal only:
 5. `superadmin_test / 123456`
 
 Never show these credentials on UI or production docs.
-

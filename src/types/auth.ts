@@ -1,4 +1,4 @@
-export type AuthRole = 'Học sinh' | 'Giáo viên' | 'Admin' | 'Quản trị viên cấp cao';
+﻿export type AuthRole = 'Học sinh' | 'Giáo viên' | 'Admin' | 'Quản trị viên cấp cao';
 export type AuthStatus = 'active' | 'pending' | 'suspended';
 export type TeacherType = 'homeroom' | 'subject' | '';
 
@@ -25,6 +25,10 @@ export type AuthErrorCode =
   | 'AUTH_INVALID_CREDENTIALS'
   | 'AUTH_PENDING_APPROVAL'
   | 'AUTH_INVALID_ROLE'
+  | 'AUTH_OTP_REQUIRED'
+  | 'AUTH_OTP_INVALID'
+  | 'AUTH_OTP_EXPIRED'
+  | 'AUTH_OTP_RATE_LIMIT'
   | 'AUTH_SERVER_ERROR';
 
 export type AuthError = {
@@ -103,4 +107,63 @@ export type AuthApiSuccessResponse = AuthApiUserResponse | AuthApiLoginSuccessRe
 export type AuthApiErrorResponse = {
   ok: false;
   error: AuthError;
+};
+
+export type ClassJoinCodeStatus = 'active' | 'revoked' | 'expired';
+
+export type AuthApiClassJoinCode = {
+  id: string;
+  className: string;
+  school: string;
+  expiresAt: string;
+  maxUses: number;
+  usedCount: number;
+  status: ClassJoinCodeStatus;
+  createdAt: string;
+  revokedAt: string | null;
+};
+
+export type AuthApiClassCodeCreateResponse = {
+  ok: true;
+  code: string;
+  data: AuthApiClassJoinCode;
+};
+
+export type AuthApiClassCodeListResponse = {
+  ok: true;
+  codes: AuthApiClassJoinCode[];
+};
+
+export type AuthApiClassCodeRevokeResponse = {
+  ok: true;
+  code: AuthApiClassJoinCode;
+};
+
+export type ClassJoinCodeEventType = 'created' | 'revoked' | 'redeem_success' | 'redeem_failed';
+
+export type AuthApiClassCodeEvent = {
+  id: string;
+  eventType: ClassJoinCodeEventType;
+  actorUserId: string | null;
+  teacherId: string | null;
+  classJoinCodeId: string | null;
+  className: string;
+  school: string;
+  studentUsername: string;
+  note: string;
+  createdAt: string;
+};
+
+export type AuthApiClassCodeEventsResponse = {
+  ok: true;
+  events: AuthApiClassCodeEvent[];
+};
+
+
+export type AuthApiRegisterOtpResponse = {
+  ok: true;
+  otpSessionId: string;
+  expiresAt: string;
+  delivery: 'gmail' | 'dev_console';
+  devOtpCode?: string;
 };

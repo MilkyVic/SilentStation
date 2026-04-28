@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
-import { AuthHttpError, getCurrentUser, healthCheck, initializeAuthCore, loginAccount, logoutToken, registerAccount, } from './auth-core.js';
+import { AuthHttpError, createClassJoinCode, getCurrentUser, healthCheck, initializeAuthCore, issueRegisterOtp, listActiveClassJoinCodes, listClassJoinCodeEvents, loginAccount, logoutToken, registerAccount, revokeClassJoinCode, } from './auth-core.js';
 const app = express();
 app.use(express.json());
 const CORS_ORIGIN = process.env.AUTH_API_CORS_ORIGIN || '*';
@@ -34,6 +34,10 @@ app.get('/api/health', asyncHandler(async (_req, res) => {
     const data = await healthCheck();
     res.status(200).json(data);
 }));
+app.post('/api/auth/otp/request-register', asyncHandler(async (req, res) => {
+    const result = await issueRegisterOtp(req.body ?? {});
+    res.status(200).json({ ok: true, ...result });
+}));
 app.post('/api/auth/register', asyncHandler(async (req, res) => {
     const user = await registerAccount(req.body ?? {});
     res.status(201).json({ ok: true, user });
@@ -49,6 +53,22 @@ app.get('/api/auth/me', asyncHandler(async (req, res) => {
 app.post('/api/auth/logout', asyncHandler(async (req, res) => {
     await logoutToken(getBearerToken(req));
     res.status(200).json({ ok: true });
+}));
+app.post('/api/class-codes/create', asyncHandler(async (req, res) => {
+    const result = await createClassJoinCode(getBearerToken(req), req.body ?? {});
+    res.status(201).json({ ok: true, code: result.code, data: result.data });
+}));
+app.get('/api/class-codes/active', asyncHandler(async (req, res) => {
+    const codes = await listActiveClassJoinCodes(getBearerToken(req));
+    res.status(200).json({ ok: true, codes });
+}));
+app.post('/api/class-codes/revoke', asyncHandler(async (req, res) => {
+    const code = await revokeClassJoinCode(getBearerToken(req), req.body ?? {});
+    res.status(200).json({ ok: true, code });
+}));
+app.get('/api/class-codes/events', asyncHandler(async (req, res) => {
+    const events = await listClassJoinCodeEvents(getBearerToken(req), req.query ?? {});
+    res.status(200).json({ ok: true, events });
 }));
 app.use((error, _req, res, _next) => {
     if (error instanceof AuthHttpError) {

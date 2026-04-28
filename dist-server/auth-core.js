@@ -1,5 +1,7 @@
+// @ts-nocheck
 import crypto from 'node:crypto';
 import { Pool } from 'pg';
+import nodemailer from 'nodemailer';
 export class AuthHttpError extends Error {
     constructor(statusCode, code, message) {
         super(message);
@@ -14,7 +16,49 @@ const ACCESS_TOKEN_TTL_SECONDS = Number(process.env.AUTH_ACCESS_TOKEN_TTL_SECOND
 const AUTH_SEED_TEST_USERS = process.env.AUTH_SEED_TEST_USERS
     ? process.env.AUTH_SEED_TEST_USERS === 'true'
     : process.env.NODE_ENV !== 'production';
+const JOIN_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const DEFAULT_JOIN_CODE_TTL_MINUTES = Number(process.env.AUTH_JOIN_CODE_TTL_MINUTES || 10);
+const DEFAULT_JOIN_CODE_MAX_USES = Number(process.env.AUTH_JOIN_CODE_MAX_USES || 60);
+const MAX_JOIN_CODE_TTL_MINUTES = 60;
+const MAX_JOIN_CODE_USES = 300;
+const JOIN_CODE_LENGTH = 8;
+const JOIN_CODE_GENERATE_ATTEMPTS = 12;
+const AUTH_REGISTER_OTP_TTL_SECONDS = Number(process.env.AUTH_REGISTER_OTP_TTL_SECONDS || 300);
+const AUTH_REGISTER_OTP_MAX_ATTEMPTS = Number(process.env.AUTH_REGISTER_OTP_MAX_ATTEMPTS || 5);
+const AUTH_REGISTER_OTP_RESEND_COOLDOWN_SECONDS = Number(process.env.AUTH_REGISTER_OTP_RESEND_COOLDOWN_SECONDS || 30);
+const AUTH_REGISTER_OTP_EXPOSE_DEV_CODE = process.env.AUTH_REGISTER_OTP_EXPOSE_DEV_CODE
+    ? process.env.AUTH_REGISTER_OTP_EXPOSE_DEV_CODE === 'true'
+    : process.env.NODE_ENV !== 'production';
+const AUTH_GMAIL_SMTP_USER = (process.env.AUTH_GMAIL_SMTP_USER || '').trim();
+const AUTH_GMAIL_SMTP_APP_PASSWORD = (process.env.AUTH_GMAIL_SMTP_APP_PASSWORD || '').trim();
+const AUTH_EMAIL_FROM = (process.env.AUTH_EMAIL_FROM || AUTH_GMAIL_SMTP_USER || 'no-reply@tram-an.vn').trim();
+const CANONICAL_SCHOOL_NAMES = {
+    chuyenHaNoiAmsterdam: 'THPT Chuyên Hà Nội - Amsterdam',
+    chuVanAn: 'THPT Chu Văn An',
+    phanDinhPhung: 'THPT Phan Đình Phùng',
+    luongTheVinh: 'THPT Lương Thế Vinh',
+    kimLien: 'THPT Kim Liên',
+};
+const SCHOOL_NAME_ALIASES = new Map([
+    ['thpt chuyen ha noi amsterdam', CANONICAL_SCHOOL_NAMES.chuyenHaNoiAmsterdam],
+    ['thpt chu van an', CANONICAL_SCHOOL_NAMES.chuVanAn],
+    ['thpt phan dinh phung', CANONICAL_SCHOOL_NAMES.phanDinhPhung],
+    ['thpt luong the vinh', CANONICAL_SCHOOL_NAMES.luongTheVinh],
+    ['thpt kim lien', CANONICAL_SCHOOL_NAMES.kimLien],
+]);
 let pool = null;
+const toSchoolLookupKey = (value) => value
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+const normalizeSchoolName = (value) => {
+    const school = typeof value === 'string' ? value.trim() : '';
+    if (!school)
+        return '';
+    return SCHOOL_NAME_ALIASES.get(toSchoolLookupKey(school)) || school;
+};
 const getPool = () => {
     if (process.env.NODE_ENV === 'production' && AUTH_SESSION_SECRET === 'dev-only-change-me') {
         throw new AuthHttpError(500, 'AUTH_SERVER_ERROR', 'Thieu bien moi truong AUTH_SESSION_SECRET.');
@@ -67,6 +111,61 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions (user_id);
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_exp_at ON auth_sessions (exp_at);
+
+CREATE TABLE IF NOT EXISTS class_join_codes (
+  id TEXT PRIMARY KEY,
+  teacher_id TEXT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+  school TEXT NOT NULL DEFAULT '',
+  class_name TEXT NOT NULL DEFAULT '',
+  code_hash TEXT NOT NULL UNIQUE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  max_uses INTEGER NOT NULL DEFAULT 60 CHECK (max_uses > 0),
+  used_count INTEGER NOT NULL DEFAULT 0 CHECK (used_count >= 0),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked', 'expired')),
+  revoked_at TIMESTAMPTZ NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_class_join_codes_teacher ON class_join_codes (teacher_id);
+CREATE INDEX IF NOT EXISTS idx_class_join_codes_status_expires ON class_join_codes (status, expires_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_class_join_codes_active_teacher_class
+  ON class_join_codes (teacher_id, class_name)
+  WHERE status = 'active';
+
+CREATE TABLE IF NOT EXISTS class_join_code_events (
+  id TEXT PRIMARY KEY,
+  event_type TEXT NOT NULL CHECK (event_type IN ('created', 'revoked', 'redeem_success', 'redeem_failed')) ,
+  actor_user_id TEXT NULL REFERENCES auth_users(id) ON DELETE SET NULL,
+  teacher_id TEXT NULL REFERENCES auth_users(id) ON DELETE SET NULL,
+  class_join_code_id TEXT NULL REFERENCES class_join_codes(id) ON DELETE SET NULL,
+  class_name TEXT NOT NULL DEFAULT '',
+  school TEXT NOT NULL DEFAULT '',
+  student_username TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_class_join_code_events_created_at ON class_join_code_events (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_class_join_code_events_teacher ON class_join_code_events (teacher_id);
+
+CREATE TABLE IF NOT EXISTS auth_register_otps (
+  id TEXT PRIMARY KEY,
+  purpose TEXT NOT NULL CHECK (purpose IN ('register_student', 'register_teacher')),
+  username TEXT NOT NULL,
+  email TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('student', 'teacher')),
+  request_fingerprint TEXT NOT NULL,
+  otp_hash TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  resend_available_at TIMESTAMPTZ NOT NULL,
+  attempts_left INTEGER NOT NULL DEFAULT 5 CHECK (attempts_left >= 0),
+  consumed_at TIMESTAMPTZ NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_register_otps_lookup ON auth_register_otps (username, role, consumed_at, expires_at DESC);
 `;
 const seedAccounts = [
     {
@@ -80,7 +179,7 @@ const seedAccounts = [
             email: 'student_test@tram-an.vn',
             birthYear: '2008',
             gender: 'Nu',
-            school: 'THPT Chuyen Ha Noi - Amsterdam',
+            school: 'THPT Chuyên Hà Nội - Amsterdam',
             className: '12A1',
             teacherType: '',
             subject: '',
@@ -97,7 +196,7 @@ const seedAccounts = [
             email: 'teacher_test@tram-an.vn',
             birthYear: '1988',
             gender: 'Nam',
-            school: 'THPT Chuyen Ha Noi - Amsterdam',
+            school: 'THPT Chuyên Hà Nội - Amsterdam',
             className: '12A1',
             teacherType: 'homeroom',
             subject: '',
@@ -114,7 +213,7 @@ const seedAccounts = [
             email: 'teacher_subject_test@tram-an.vn',
             birthYear: '1989',
             gender: 'Nu',
-            school: 'THPT Chuyen Ha Noi - Amsterdam',
+            school: 'THPT Chuyên Hà Nội - Amsterdam',
             className: '',
             teacherType: 'subject',
             subject: 'toan',
@@ -131,7 +230,7 @@ const seedAccounts = [
             email: 'admin_test@tram-an.vn',
             birthYear: '1985',
             gender: 'Nam',
-            school: 'THPT Chuyen Ha Noi - Amsterdam',
+            school: 'THPT Chuyên Hà Nội - Amsterdam',
             className: '',
             teacherType: '',
             subject: '',
@@ -170,6 +269,87 @@ const verifyPassword = (password, storedHash) => {
     if (expectedBuffer.length !== candidateBuffer.length)
         return false;
     return crypto.timingSafeEqual(expectedBuffer, candidateBuffer);
+};
+const normalizeJoinCode = (value) => value.trim().toUpperCase();
+const hashJoinCode = (code) => crypto
+    .createHmac('sha256', AUTH_SESSION_SECRET)
+    .update(normalizeJoinCode(code))
+    .digest('hex');
+const createJoinCode = () => Array.from({ length: JOIN_CODE_LENGTH }, () => JOIN_CODE_ALPHABET[Math.floor(Math.random() * JOIN_CODE_ALPHABET.length)]).join('');
+const sanitizeTtlMinutes = (ttlMinutes) => {
+    const value = Number(ttlMinutes ?? DEFAULT_JOIN_CODE_TTL_MINUTES);
+    if (!Number.isFinite(value) || value <= 0)
+        return DEFAULT_JOIN_CODE_TTL_MINUTES;
+    return Math.min(Math.floor(value), MAX_JOIN_CODE_TTL_MINUTES);
+};
+const sanitizeMaxUses = (maxUses) => {
+    const value = Number(maxUses ?? DEFAULT_JOIN_CODE_MAX_USES);
+    if (!Number.isFinite(value) || value <= 0)
+        return DEFAULT_JOIN_CODE_MAX_USES;
+    return Math.min(Math.floor(value), MAX_JOIN_CODE_USES);
+};
+const normalizeEmail = (value) => (typeof value === 'string' ? value.trim().toLowerCase() : '');
+const createRegisterOtpCode = () => String(Math.floor(100000 + Math.random() * 900000));
+const hashRegisterOtp = (sessionId, otpCode) => crypto
+    .createHmac('sha256', AUTH_SESSION_SECRET)
+    .update(`${sessionId}:${otpCode}`)
+    .digest('hex');
+const buildRegisterOtpFingerprint = (payload) => {
+    const username = typeof payload.username === 'string' ? normalizeUsername(payload.username) : '';
+    const role = payload.role === 'teacher' ? 'teacher' : 'student';
+    const email = normalizeEmail(payload?.profile?.email);
+    return `${username}|${role}|${email}`;
+};
+const getRegisterOtpPurpose = (role) => (role === 'teacher' ? 'register_teacher' : 'register_student');
+const maskEmailForLog = (email) => {
+    const [name = '', domain = ''] = String(email || '').split('@');
+    if (!name || !domain)
+        return email;
+    if (name.length <= 2)
+        return `${name[0] || '*'}***@${domain}`;
+    return `${name.slice(0, 2)}***@${domain}`;
+};
+let registerOtpMailer = null;
+const getRegisterOtpMailer = () => {
+    if (!AUTH_GMAIL_SMTP_USER || !AUTH_GMAIL_SMTP_APP_PASSWORD)
+        return null;
+    if (registerOtpMailer)
+        return registerOtpMailer;
+    registerOtpMailer = nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+            user: AUTH_GMAIL_SMTP_USER,
+            pass: AUTH_GMAIL_SMTP_APP_PASSWORD,
+        },
+    });
+    return registerOtpMailer;
+};
+const sendRegisterOtpEmail = async ({ email, otpCode, purpose, fullName }) => {
+    const mailer = getRegisterOtpMailer();
+    if (!mailer)
+        return false;
+    const subject = purpose === 'register_teacher'
+        ? 'Ma OTP dang ky tai khoan giao vien - Tram An'
+        : 'Ma OTP dang ky tai khoan hoc sinh - Tram An';
+    const greetingName = fullName || 'ban';
+    const bodyText = [
+        `Xin chao ${greetingName},`,
+        '',
+        'Ma OTP dang ky cua ban la:',
+        otpCode,
+        '',
+        `Ma co hieu luc trong ${Math.floor(AUTH_REGISTER_OTP_TTL_SECONDS / 60)} phut.`,
+        'Neu khong phai ban thuc hien yeu cau nay, vui long bo qua email.',
+        '',
+        'Tram An',
+    ].join('\n');
+    await mailer.sendMail({
+        from: AUTH_EMAIL_FROM,
+        to: email,
+        subject,
+        text: bodyText,
+    });
+    return true;
 };
 const encodeBase64Url = (value) => Buffer.from(value).toString('base64url');
 const decodeBase64Url = (value) => Buffer.from(value, 'base64url').toString('utf8');
@@ -219,7 +399,7 @@ const mapUserRow = (row) => ({
         email: row.profile_email,
         birthYear: row.profile_birth_year,
         gender: row.profile_gender,
-        school: row.profile_school,
+        school: normalizeSchoolName(row.profile_school),
         className: row.profile_class_name,
         teacherType: row.profile_teacher_type || (row.profile_class_name ? 'homeroom' : ''),
         subject: row.profile_subject || '',
@@ -231,6 +411,57 @@ const toApiUser = (account) => ({
     role: account.role,
     status: account.status,
     profile: account.profile,
+});
+const mapJoinCodeRow = (row) => ({
+    id: row.id,
+    className: row.class_name,
+    school: normalizeSchoolName(row.school),
+    expiresAt: row.expires_at,
+    maxUses: row.max_uses,
+    usedCount: row.used_count,
+    status: row.status,
+    createdAt: row.created_at,
+    revokedAt: row.revoked_at,
+});
+const insertClassJoinCodeEvent = async (event, client = null) => {
+    const runner = client || getPool();
+    await runner.query(`
+      INSERT INTO class_join_code_events (
+        id,
+        event_type,
+        actor_user_id,
+        teacher_id,
+        class_join_code_id,
+        class_name,
+        school,
+        student_username,
+        note
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9
+      )
+    `, [
+        `evt-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        event.eventType,
+        event.actorUserId || null,
+        event.teacherId || null,
+        event.classJoinCodeId || null,
+        event.className || '',
+        normalizeSchoolName(event.school || ''),
+        event.studentUsername || '',
+        event.note || '',
+    ]);
+};
+const mapJoinCodeEventRow = (row) => ({
+    id: row.id,
+    eventType: row.event_type,
+    actorUserId: row.actor_user_id,
+    teacherId: row.teacher_id,
+    classJoinCodeId: row.class_join_code_id,
+    className: row.class_name,
+    school: normalizeSchoolName(row.school),
+    studentUsername: row.student_username,
+    note: row.note,
+    createdAt: row.created_at,
 });
 const findAccountByUsername = async (username) => {
     const result = await getPool().query(`
@@ -310,7 +541,43 @@ const insertAccount = async (account) => {
         account.profile.email,
         account.profile.birthYear,
         account.profile.gender,
-        account.profile.school,
+        normalizeSchoolName(account.profile.school),
+        account.profile.className,
+        account.profile.teacherType || '',
+        account.profile.subject || '',
+    ]);
+};
+const insertAccountWithClient = async (client, account) => {
+    await client.query(`
+      INSERT INTO auth_users (
+        id,
+        username,
+        password_hash,
+        role,
+        status,
+        profile_name,
+        profile_email,
+        profile_birth_year,
+        profile_gender,
+        profile_school,
+        profile_class_name,
+        profile_teacher_type,
+        profile_subject
+      ) VALUES (
+        $1, $2, $3, $4, $5,
+        $6, $7, $8, $9, $10, $11, $12, $13
+      )
+    `, [
+        account.id,
+        account.username,
+        account.passwordHash,
+        account.role,
+        account.status,
+        account.profile.name,
+        account.profile.email,
+        account.profile.birthYear,
+        account.profile.gender,
+        normalizeSchoolName(account.profile.school),
         account.profile.className,
         account.profile.teacherType || '',
         account.profile.subject || '',
@@ -349,12 +616,44 @@ const revokeSession = async (jti) => {
 const cleanupExpiredSessions = async () => {
     await getPool().query('DELETE FROM auth_sessions WHERE exp_at <= NOW()');
 };
+const cleanupExpiredJoinCodes = async () => {
+    await getPool().query(`
+      UPDATE class_join_codes
+      SET status = 'expired', updated_at = NOW()
+      WHERE status = 'active'
+        AND expires_at <= NOW()
+    `);
+};
 let initializedPromise = null;
 export const initializeAuthCore = async () => {
     if (initializedPromise)
         return initializedPromise;
     initializedPromise = (async () => {
         await getPool().query(authSchemaSql);
+        await getPool().query(`
+          UPDATE auth_users
+          SET profile_school = $1, updated_at = NOW()
+          WHERE LOWER(profile_school) IN (
+            'thpt chuyen ha noi - amsterdam',
+            'thpt chuyen ha noi amsterdam'
+          )
+        `, [CANONICAL_SCHOOL_NAMES.chuyenHaNoiAmsterdam]);
+        await getPool().query(`
+          UPDATE class_join_codes
+          SET school = $1, updated_at = NOW()
+          WHERE LOWER(school) IN (
+            'thpt chuyen ha noi - amsterdam',
+            'thpt chuyen ha noi amsterdam'
+          )
+        `, [CANONICAL_SCHOOL_NAMES.chuyenHaNoiAmsterdam]);
+        await getPool().query(`
+          UPDATE class_join_code_events
+          SET school = $1
+          WHERE LOWER(school) IN (
+            'thpt chuyen ha noi - amsterdam',
+            'thpt chuyen ha noi amsterdam'
+          )
+        `, [CANONICAL_SCHOOL_NAMES.chuyenHaNoiAmsterdam]);
         if (!AUTH_SEED_TEST_USERS)
             return;
         for (const seed of seedAccounts) {
@@ -378,7 +677,19 @@ export const initializeAuthCore = async () => {
             $6, $7, $8, $9, $10, $11, $12, $13
           )
           ON CONFLICT (username)
-          DO NOTHING
+          DO UPDATE SET
+            password_hash = EXCLUDED.password_hash,
+            role = EXCLUDED.role,
+            status = EXCLUDED.status,
+            profile_name = EXCLUDED.profile_name,
+            profile_email = EXCLUDED.profile_email,
+            profile_birth_year = EXCLUDED.profile_birth_year,
+            profile_gender = EXCLUDED.profile_gender,
+            profile_school = EXCLUDED.profile_school,
+            profile_class_name = EXCLUDED.profile_class_name,
+            profile_teacher_type = EXCLUDED.profile_teacher_type,
+            profile_subject = EXCLUDED.profile_subject,
+            updated_at = NOW()
         `, [
                 seed.id,
                 normalizeUsername(seed.username),
@@ -408,11 +719,11 @@ export const initializeAuthCore = async () => {
 export const healthCheck = async () => {
     await initializeAuthCore();
     await cleanupExpiredSessions();
+    await cleanupExpiredJoinCodes();
     await getPool().query('SELECT 1');
     return { ok: true, service: 'auth-api' };
 };
-export const registerAccount = async (payload) => {
-    await initializeAuthCore();
+const validateRegisterInputForOtp = (payload) => {
     const normalizedUsername = typeof payload.username === 'string'
         ? normalizeUsername(payload.username)
         : '';
@@ -425,10 +736,6 @@ export const registerAccount = async (payload) => {
     if (payload.role === 'student' && (!payload.regCode || typeof payload.regCode !== 'string')) {
         throw new AuthHttpError(400, 'AUTH_INVALID_ROLE', 'Ma dang ky hoc sinh khong hop le.');
     }
-    const existing = await findAccountByUsername(normalizedUsername);
-    if (existing) {
-        throw new AuthHttpError(409, 'AUTH_USERNAME_EXISTS', 'Ten dang nhap da ton tai.');
-    }
     const requestedTeacherType = payload.profile.teacherType;
     const teacherType = payload.role === 'teacher'
         ? (requestedTeacherType === 'homeroom' || requestedTeacherType === 'subject'
@@ -437,29 +744,512 @@ export const registerAccount = async (payload) => {
         : '';
     const normalizedClassName = payload.role === 'teacher' && teacherType === 'subject'
         ? ''
-        : (payload.profile.className || '');
+        : String(payload.profile.className || '').trim();
     const normalizedSubject = payload.role === 'teacher' && teacherType === 'subject'
-        ? (payload.profile.subject || '')
+        ? String(payload.profile.subject || '').trim()
         : '';
+    if (payload.role === 'teacher' && teacherType === 'homeroom' && !normalizedClassName) {
+        throw new AuthHttpError(400, 'AUTH_INVALID_ROLE', 'Vui long nhap lop chu nhiem.');
+    }
+    if (payload.role === 'teacher' && teacherType === 'subject' && !normalizedSubject) {
+        throw new AuthHttpError(400, 'AUTH_INVALID_ROLE', 'Vui long nhap mon giang day.');
+    }
+    const normalizedEmail = normalizeEmail(payload.profile.email || `${normalizedUsername}@tram-an.vn`);
+    if (!normalizedEmail || !normalizedEmail.includes('@')) {
+        throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Email dang ky khong hop le.');
+    }
+    const normalizedSchool = normalizeSchoolName(payload.profile.school || '');
+    return {
+        normalizedUsername,
+        normalizedEmail,
+        normalizedSchool,
+        role: payload.role,
+        teacherType,
+        normalizedClassName,
+        normalizedSubject,
+    };
+};
+const consumeRegisterOtpOrThrow = async ({ payload, normalizedUsername, role, normalizedEmail }) => {
+    const otpSessionId = typeof payload.otpSessionId === 'string' ? payload.otpSessionId.trim() : '';
+    const otpCode = typeof payload.otpCode === 'string' ? payload.otpCode.trim() : '';
+    if (!otpSessionId || !otpCode) {
+        throw new AuthHttpError(400, 'AUTH_OTP_REQUIRED', 'Vui long nhap OTP dang ky.');
+    }
+    const sessionResult = await getPool().query(`
+      SELECT
+        id,
+        username,
+        email,
+        role,
+        request_fingerprint,
+        otp_hash,
+        expires_at,
+        attempts_left,
+        consumed_at
+      FROM auth_register_otps
+      WHERE id = $1
+      LIMIT 1
+    `, [otpSessionId]);
+    if (sessionResult.rows.length === 0) {
+        throw new AuthHttpError(400, 'AUTH_OTP_INVALID', 'Phien OTP dang ky khong ton tai.');
+    }
+    const session = sessionResult.rows[0];
+    if (session.consumed_at) {
+        throw new AuthHttpError(400, 'AUTH_OTP_INVALID', 'Ma OTP da duoc su dung.');
+    }
+    if (new Date(session.expires_at).getTime() <= Date.now()) {
+        throw new AuthHttpError(400, 'AUTH_OTP_EXPIRED', 'Ma OTP da het han.');
+    }
+    if (session.username !== normalizedUsername || session.role !== role || session.email !== normalizedEmail) {
+        throw new AuthHttpError(400, 'AUTH_OTP_INVALID', 'Thong tin dang ky khong khop voi phien OTP.');
+    }
+    const expectedFingerprint = buildRegisterOtpFingerprint({
+        username: normalizedUsername,
+        role,
+        profile: { email: normalizedEmail },
+    });
+    if (session.request_fingerprint !== expectedFingerprint) {
+        throw new AuthHttpError(400, 'AUTH_OTP_INVALID', 'Phien OTP khong hop le.');
+    }
+    const incomingHash = hashRegisterOtp(otpSessionId, otpCode);
+    if (incomingHash !== session.otp_hash) {
+        const attemptsLeft = Math.max(Number(session.attempts_left || 0) - 1, 0);
+        await getPool().query(`
+          UPDATE auth_register_otps
+          SET attempts_left = $2, updated_at = NOW()
+          WHERE id = $1
+        `, [otpSessionId, attemptsLeft]);
+        throw new AuthHttpError(400, 'AUTH_OTP_INVALID', attemptsLeft <= 0
+            ? 'Ma OTP sai qua so lan cho phep. Vui long yeu cau ma moi.'
+            : 'Ma OTP khong chinh xac.');
+    }
+    await getPool().query(`
+      UPDATE auth_register_otps
+      SET consumed_at = NOW(), updated_at = NOW()
+      WHERE id = $1
+    `, [otpSessionId]);
+};
+export const issueRegisterOtp = async (payload) => {
+    await initializeAuthCore();
+    const { normalizedUsername, normalizedEmail, role } = validateRegisterInputForOtp(payload);
+    const existing = await findAccountByUsername(normalizedUsername);
+    if (existing) {
+        throw new AuthHttpError(409, 'AUTH_USERNAME_EXISTS', 'Ten dang nhap da ton tai.');
+    }
+    const cooldownCheck = await getPool().query(`
+      SELECT resend_available_at
+      FROM auth_register_otps
+      WHERE username = $1
+        AND role = $2
+        AND email = $3
+        AND consumed_at IS NULL
+        AND expires_at > NOW()
+      ORDER BY created_at DESC
+      LIMIT 1
+    `, [normalizedUsername, role, normalizedEmail]);
+    if (cooldownCheck.rows.length > 0) {
+        const availableAt = new Date(cooldownCheck.rows[0].resend_available_at).getTime();
+        if (availableAt > Date.now()) {
+            const waitSeconds = Math.ceil((availableAt - Date.now()) / 1000);
+            throw new AuthHttpError(429, 'AUTH_OTP_RATE_LIMIT', `Vui long cho ${waitSeconds}s de gui lai OTP.`);
+        }
+    }
+    const otpSessionId = `otp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const otpCode = createRegisterOtpCode();
+    const otpHash = hashRegisterOtp(otpSessionId, otpCode);
+    const purpose = getRegisterOtpPurpose(role);
+    const fingerprint = buildRegisterOtpFingerprint({
+        username: normalizedUsername,
+        role,
+        profile: { email: normalizedEmail },
+    });
+    const expiresAt = new Date(Date.now() + AUTH_REGISTER_OTP_TTL_SECONDS * 1000);
+    const resendAvailableAt = new Date(Date.now() + AUTH_REGISTER_OTP_RESEND_COOLDOWN_SECONDS * 1000);
+    await getPool().query(`
+      INSERT INTO auth_register_otps (
+        id, purpose, username, email, role, request_fingerprint, otp_hash, expires_at, resend_available_at, attempts_left
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+      )
+    `, [
+        otpSessionId,
+        purpose,
+        normalizedUsername,
+        normalizedEmail,
+        role,
+        fingerprint,
+        otpHash,
+        expiresAt,
+        resendAvailableAt,
+        AUTH_REGISTER_OTP_MAX_ATTEMPTS,
+    ]);
+    let delivery = 'dev_console';
+    try {
+        const sent = await sendRegisterOtpEmail({
+            email: normalizedEmail,
+            otpCode,
+            purpose,
+            fullName: String(payload?.profile?.name || '').trim(),
+        });
+        delivery = sent ? 'gmail' : 'dev_console';
+        if (!sent && process.env.NODE_ENV === 'production') {
+            throw new AuthHttpError(500, 'AUTH_SERVER_ERROR', 'OTP email chua duoc cau hinh Gmail SMTP.');
+        }
+    }
+    catch (error) {
+        console.error('[auth-otp] send email failed', error);
+        if (process.env.NODE_ENV === 'production') {
+            throw new AuthHttpError(500, 'AUTH_SERVER_ERROR', 'Khong the gui OTP qua email.');
+        }
+    }
+    if (delivery === 'dev_console') {
+        console.log(`[auth-otp] OTP ${otpCode} for ${normalizedUsername} -> ${maskEmailForLog(normalizedEmail)}`);
+    }
+    return {
+        otpSessionId,
+        expiresAt: expiresAt.toISOString(),
+        delivery,
+        ...(AUTH_REGISTER_OTP_EXPOSE_DEV_CODE ? { devOtpCode: otpCode } : {}),
+    };
+};
+export const registerAccount = async (payload) => {
+    await initializeAuthCore();
+    const { normalizedUsername, normalizedEmail, normalizedSchool, role, teacherType, normalizedClassName, normalizedSubject, } = validateRegisterInputForOtp(payload);
+    await consumeRegisterOtpOrThrow({
+        payload,
+        normalizedUsername,
+        role,
+        normalizedEmail,
+    });
     const account = {
         id: `acc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         username: normalizedUsername,
         passwordHash: hashPassword(payload.password),
-        role: payload.role,
-        status: payload.role === 'teacher' ? 'pending' : 'active',
+        role,
+        status: role === 'teacher' ? 'pending' : 'active',
         profile: {
             name: payload.profile.name || normalizedUsername,
-            email: payload.profile.email || `${normalizedUsername}@tram-an.vn`,
+            email: normalizedEmail,
             birthYear: payload.profile.birthYear || '',
             gender: payload.profile.gender || '',
-            school: payload.profile.school || '',
+            school: normalizedSchool,
             className: normalizedClassName,
             teacherType,
             subject: normalizedSubject,
         },
     };
-    await insertAccount(account);
-    return toApiUser(account);
+    if (role !== 'student') {
+        const existing = await findAccountByUsername(normalizedUsername);
+        if (existing) {
+            throw new AuthHttpError(409, 'AUTH_USERNAME_EXISTS', 'Ten dang nhap da ton tai.');
+        }
+        await insertAccount(account);
+        return toApiUser(account);
+    }
+    const client = await getPool().connect();
+    try {
+        await client.query('BEGIN');
+        const existing = await client.query('SELECT 1 FROM auth_users WHERE username = $1 LIMIT 1', [normalizedUsername]);
+        if ((existing.rowCount || 0) > 0) {
+            throw new AuthHttpError(409, 'AUTH_USERNAME_EXISTS', 'Ten dang nhap da ton tai.');
+        }
+        const normalizedJoinCode = normalizeJoinCode(payload.regCode || '');
+        const joinCodeHash = hashJoinCode(normalizedJoinCode);
+        const joinCodeResult = await client.query(`
+        SELECT
+          id,
+          teacher_id,
+          school,
+          class_name,
+          code_hash,
+          expires_at,
+          max_uses,
+          used_count,
+          status,
+          created_at,
+          revoked_at
+        FROM class_join_codes
+        WHERE code_hash = $1
+        LIMIT 1
+        FOR UPDATE
+      `, [joinCodeHash]);
+        if (joinCodeResult.rows.length === 0) {
+            await insertClassJoinCodeEvent({
+                eventType: 'redeem_failed',
+                studentUsername: normalizedUsername,
+                note: 'invalid_code_not_found',
+            }, client);
+            throw new AuthHttpError(400, 'AUTH_INVALID_ROLE', 'Ma dang ky hoc sinh khong hop le.');
+        }
+        const joinCode = joinCodeResult.rows[0];
+        const joinCodeExpired = new Date(joinCode.expires_at).getTime() <= Date.now();
+        const joinCodeFull = joinCode.used_count >= joinCode.max_uses;
+        const joinCodeInactive = joinCode.status !== 'active';
+        if (joinCodeExpired || joinCodeFull || joinCodeInactive) {
+            await client.query(`
+          UPDATE class_join_codes
+          SET
+            status = CASE
+              WHEN status = 'active' AND expires_at <= NOW() THEN 'expired'
+              WHEN status = 'active' AND used_count >= max_uses THEN 'expired'
+              ELSE status
+            END,
+            updated_at = NOW()
+          WHERE id = $1
+        `, [joinCode.id]);
+            await insertClassJoinCodeEvent({
+                eventType: 'redeem_failed',
+                teacherId: joinCode.teacher_id,
+                classJoinCodeId: joinCode.id,
+                className: joinCode.class_name,
+                school: normalizeSchoolName(joinCode.school),
+                studentUsername: normalizedUsername,
+                note: joinCodeExpired ? 'expired' : (joinCodeFull ? 'max_uses_reached' : 'inactive_status'),
+            }, client);
+            throw new AuthHttpError(400, 'AUTH_INVALID_ROLE', 'Ma dang ky hoc sinh khong hop le.');
+        }
+        const nextUsedCount = joinCode.used_count + 1;
+        const nextStatus = nextUsedCount >= joinCode.max_uses ? 'expired' : 'active';
+        await client.query(`
+        UPDATE class_join_codes
+        SET
+          used_count = $2,
+          status = $3,
+          updated_at = NOW()
+        WHERE id = $1
+      `, [joinCode.id, nextUsedCount, nextStatus]);
+        account.profile.school = normalizeSchoolName(joinCode.school);
+        account.profile.className = joinCode.class_name;
+        account.profile.teacherType = '';
+        account.profile.subject = '';
+        await insertAccountWithClient(client, account);
+        await insertClassJoinCodeEvent({
+            eventType: 'redeem_success',
+            teacherId: joinCode.teacher_id,
+            classJoinCodeId: joinCode.id,
+            className: joinCode.class_name,
+            school: normalizeSchoolName(joinCode.school),
+            studentUsername: normalizedUsername,
+            note: 'student_registered',
+        }, client);
+        await client.query('COMMIT');
+        return toApiUser(account);
+    }
+    catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    }
+    finally {
+        client.release();
+    }
+};
+export const createClassJoinCode = async (token, input = {}) => {
+    await initializeAuthCore();
+    await cleanupExpiredJoinCodes();
+    const user = await getCurrentUser(token);
+    if (user.role !== 'teacher') {
+        throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Chi giao vien moi duoc tao ma lop.');
+    }
+    const userTeacherType = user.profile.teacherType || (user.profile.className ? 'homeroom' : 'subject');
+    if (userTeacherType !== 'homeroom') {
+        throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Chi giao vien chu nhiem moi duoc tao ma lop.');
+    }
+    const className = (input.className || user.profile.className || '').trim();
+    if (!className) {
+        throw new AuthHttpError(400, 'AUTH_INVALID_ROLE', 'Khong tim thay lop chu nhiem de tao ma.');
+    }
+    if (user.profile.className && className !== user.profile.className) {
+        throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Giao vien chi duoc tao ma cho lop cua minh.');
+    }
+    const ttlMinutes = sanitizeTtlMinutes(input.ttlMinutes);
+    const maxUses = sanitizeMaxUses(input.maxUses);
+    const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
+    const client = await getPool().connect();
+    try {
+        await client.query('BEGIN');
+        // Serialize create-code operations per teacher/class to avoid multiple active codes.
+        await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`${user.id}:${className}`]);
+        await client.query(`
+      UPDATE class_join_codes
+      SET status = 'revoked', revoked_at = NOW(), updated_at = NOW()
+      WHERE teacher_id = $1
+        AND class_name = $2
+        AND status = 'active'
+    `, [user.id, className]);
+        for (let attempt = 0; attempt < JOIN_CODE_GENERATE_ATTEMPTS; attempt += 1) {
+            const code = createJoinCode();
+            const codeHash = hashJoinCode(code);
+            const inserted = await client.query(`
+        INSERT INTO class_join_codes (
+          id,
+          teacher_id,
+          school,
+          class_name,
+          code_hash,
+          expires_at,
+          max_uses,
+          used_count,
+          status
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, 0, 'active'
+        )
+        ON CONFLICT (code_hash)
+        DO NOTHING
+        RETURNING
+          id,
+          teacher_id,
+          school,
+          class_name,
+          code_hash,
+          expires_at,
+          max_uses,
+          used_count,
+          status,
+          created_at,
+          revoked_at
+      `, [
+                `join-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                user.id,
+                normalizeSchoolName(user.profile.school || ''),
+                className,
+                codeHash,
+                expiresAt,
+                maxUses,
+            ]);
+            if ((inserted.rowCount || 0) > 0) {
+                await insertClassJoinCodeEvent({
+                    eventType: 'created',
+                    actorUserId: user.id,
+                    teacherId: user.id,
+                    classJoinCodeId: inserted.rows[0].id,
+                    className,
+                    school: normalizeSchoolName(user.profile.school || ''),
+                    note: 'teacher_created_code',
+                }, client);
+                await client.query('COMMIT');
+                return {
+                    code,
+                    data: mapJoinCodeRow(inserted.rows[0]),
+                };
+            }
+        }
+        throw new AuthHttpError(500, 'AUTH_SERVER_ERROR', 'Khong the tao ma lop. Vui long thu lai.');
+    }
+    catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+    }
+    finally {
+        client.release();
+    }
+};
+export const listActiveClassJoinCodes = async (token) => {
+    await initializeAuthCore();
+    await cleanupExpiredJoinCodes();
+    const user = await getCurrentUser(token);
+    if (user.role !== 'teacher' && user.role !== 'admin' && user.role !== 'superadmin') {
+        throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Khong co quyen xem ma lop.');
+    }
+    const teacherClause = user.role === 'teacher' ? 'AND teacher_id = $1' : '';
+    const params = user.role === 'teacher' ? [user.id] : [];
+    const result = await getPool().query(`
+      SELECT
+        id,
+        teacher_id,
+        school,
+        class_name,
+        code_hash,
+        expires_at,
+        max_uses,
+        used_count,
+        status,
+        created_at,
+        revoked_at
+      FROM class_join_codes
+      WHERE status = 'active'
+        AND expires_at > NOW()
+        ${teacherClause}
+      ORDER BY created_at DESC
+      LIMIT 20
+    `, params);
+    return result.rows.map(mapJoinCodeRow);
+};
+export const revokeClassJoinCode = async (token, payload) => {
+    await initializeAuthCore();
+    const user = await getCurrentUser(token);
+    if (user.role !== 'teacher' && user.role !== 'admin' && user.role !== 'superadmin') {
+        throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Khong co quyen thu hoi ma lop.');
+    }
+    const codeId = typeof payload.id === 'string' ? payload.id.trim() : '';
+    if (!codeId) {
+        throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Thieu id ma lop can thu hoi.');
+    }
+    const ownershipClause = user.role === 'teacher' ? 'AND teacher_id = $2' : '';
+    const params = user.role === 'teacher' ? [codeId, user.id] : [codeId];
+    const result = await getPool().query(`
+      UPDATE class_join_codes
+      SET
+        status = 'revoked',
+        revoked_at = NOW(),
+        updated_at = NOW()
+      WHERE id = $1
+        AND status = 'active'
+        ${ownershipClause}
+      RETURNING
+        id,
+        teacher_id,
+        school,
+        class_name,
+        code_hash,
+        expires_at,
+        max_uses,
+        used_count,
+        status,
+        created_at,
+        revoked_at
+    `, params);
+    if ((result.rowCount || 0) === 0) {
+        throw new AuthHttpError(404, 'AUTH_SERVER_ERROR', 'Khong tim thay ma lop de thu hoi.');
+    }
+    await insertClassJoinCodeEvent({
+        eventType: 'revoked',
+        actorUserId: user.id,
+        teacherId: result.rows[0].teacher_id,
+        classJoinCodeId: result.rows[0].id,
+        className: result.rows[0].class_name,
+        school: normalizeSchoolName(result.rows[0].school),
+        note: 'manual_revoke',
+    });
+    return mapJoinCodeRow(result.rows[0]);
+};
+export const listClassJoinCodeEvents = async (token, input = {}) => {
+    await initializeAuthCore();
+    const user = await getCurrentUser(token);
+    if (user.role !== 'teacher' && user.role !== 'admin' && user.role !== 'superadmin') {
+        throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Khong co quyen xem lich su ma lop.');
+    }
+    const limit = Math.min(Math.max(Number(input.limit || 50), 1), 200);
+    const teacherClause = user.role === 'teacher' ? 'AND teacher_id = $1' : '';
+    const params = user.role === 'teacher' ? [user.id, limit] : [limit];
+    const result = await getPool().query(`
+      SELECT
+        id,
+        event_type,
+        actor_user_id,
+        teacher_id,
+        class_join_code_id,
+        class_name,
+        school,
+        student_username,
+        note,
+        created_at
+      FROM class_join_code_events
+      WHERE 1 = 1
+        ${teacherClause}
+      ORDER BY created_at DESC
+      LIMIT $${user.role === 'teacher' ? '2' : '1'}
+    `, params);
+    return result.rows.map(mapJoinCodeEventRow);
 };
 export const loginAccount = async (payload) => {
     await initializeAuthCore();
