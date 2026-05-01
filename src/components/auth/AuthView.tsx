@@ -73,6 +73,11 @@ export default function AuthView({
   const [otpDelivery, setOtpDelivery] = useState<'gmail' | 'dev_console' | null>(null);
   const [otpExpiresAt, setOtpExpiresAt] = useState<number | null>(null);
   const [devOtpCode, setDevOtpCode] = useState<string | null>(null);
+  const [adminLoginOtpRequired, setAdminLoginOtpRequired] = useState(false);
+  const [adminLoginOtpCode, setAdminLoginOtpCode] = useState('');
+  const [adminLoginOtpMaskedEmail, setAdminLoginOtpMaskedEmail] = useState('');
+  const [adminLoginOtpExpiresAt, setAdminLoginOtpExpiresAt] = useState<number | null>(null);
+  const [adminLoginDevOtpCode, setAdminLoginDevOtpCode] = useState<string | null>(null);
 
   const otpExpiryDisplay = useMemo(() => {
     if (!otpExpiresAt) return null;
@@ -85,6 +90,15 @@ export default function AuthView({
     setOtpDelivery(null);
     setOtpExpiresAt(null);
     setDevOtpCode(null);
+  };
+
+  const resetAdminLoginOtpState = () => {
+    setAdminLoginOtpRequired(false);
+    setAdminLoginOtpCode('');
+    setAdminLoginOtpMaskedEmail('');
+    setAdminLoginOtpExpiresAt(null);
+    setAdminLoginDevOtpCode(null);
+    authService.clearPendingAdminLoginOtp();
   };
 
   const resetMessages = () => {
@@ -158,8 +172,10 @@ export default function AuthView({
             onClick={() => {
               if (verificationStep !== 'none') {
                 setVerificationStep('none');
+                resetAdminLoginOtpState();
                 return;
               }
+              resetAdminLoginOtpState();
               onBack();
             }}
             className="absolute -left-2 top-0 p-2 text-gray-400 hover:text-brand-primary transition-colors"
@@ -201,6 +217,7 @@ export default function AuthView({
                 setAuthMode('login');
                 resetMessages();
                 resetOtpState();
+                resetAdminLoginOtpState();
                 setAuthForm((prev) => ({ ...prev, password: '', regCode: '' }));
               }}
               className="w-full bg-brand-primary text-white py-5 rounded-2xl font-black text-sm hover:shadow-2xl hover:shadow-brand-primary/30 transition-all"
@@ -343,16 +360,48 @@ export default function AuthView({
                   return;
                 }
 
+                if (adminLoginOtpRequired) {
+                  if (!adminLoginOtpCode.trim()) {
+                    setRegError('Vui lòng nhập mã OTP email.');
+                    return;
+                  }
+                  const verifyOtpResult = await authService.verifyAdminLoginOtp(adminLoginOtpCode.trim());
+                  if (!verifyOtpResult.ok) {
+                    setRegError(getAuthErrorMessage(verifyOtpResult, 'Xác thực OTP thất bại.'));
+                    return;
+                  }
+                  resetAdminLoginOtpState();
+                  onLoginSuccess(verifyOtpResult.account);
+                  return;
+                }
+
                 const loginResult = await authService.login({
                   username: normalizedUsername,
                   password: authForm.password,
                 });
 
-                if (!loginResult.ok) {
+                if ('error' in loginResult) {
+                  if (loginResult.error.code === 'AUTH_OTP_REQUIRED') {
+                    const pendingOtp = authService.getPendingAdminLoginOtp();
+                    if (pendingOtp) {
+                      setAdminLoginOtpRequired(true);
+                      setAdminLoginOtpMaskedEmail(pendingOtp.maskedEmail);
+                      setAdminLoginOtpExpiresAt(new Date(pendingOtp.expiresAt).getTime());
+                      setAdminLoginDevOtpCode(pendingOtp.devOtpCode || null);
+                      setRegSuccess(
+                        pendingOtp.devOtpCode
+                          ? `Đã gửi OTP đăng nhập. Mã dev: ${pendingOtp.devOtpCode}`
+                          : `Đã gửi OTP đăng nhập đến email ${pendingOtp.maskedEmail}.`,
+                      );
+                      setRegError(null);
+                      return;
+                    }
+                  }
                   setRegError(getAuthErrorMessage(loginResult, 'Đăng nhập thất bại.'));
                   return;
                 }
 
+                resetAdminLoginOtpState();
                 onLoginSuccess(loginResult.account);
               }}
             >
@@ -434,6 +483,60 @@ export default function AuthView({
                   />
                 </div>
               </div>
+
+              {authMode === 'login' && adminLoginOtpRequired && (
+                <div className="space-y-3 rounded-2xl border border-brand-orange/30 bg-brand-orange/5 p-4">
+                  <p className="text-[11px] font-bold text-brand-orange">
+                    Nhập OTP email cho tài khoản quản trị ({adminLoginOtpMaskedEmail}).
+                  </p>
+                  {adminLoginOtpExpiresAt && (
+                    <p className="text-[10px] text-gray-500">
+                      Hết hạn lúc: {new Date(adminLoginOtpExpiresAt).toLocaleTimeString()}
+                    </p>
+                  )}
+                  {adminLoginDevOtpCode && (
+                    <p className="text-[10px] text-brand-orange font-bold">OTP dev: {adminLoginDevOtpCode}</p>
+                  )}
+                  <input
+                    type="text"
+                    value={adminLoginOtpCode}
+                    onChange={(e) => setAdminLoginOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    className="w-full px-4 py-3 rounded-xl bg-white border border-gray-200 focus:ring-2 focus:ring-brand-primary/20 outline-none font-bold text-gray-700"
+                    placeholder="Nhập mã OTP email"
+                  />
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      resetMessages();
+                      const resendResult = await authService.login({
+                        username: authForm.username.trim().toLowerCase(),
+                        password: authForm.password,
+                      });
+                      if ('error' in resendResult && resendResult.error.code !== 'AUTH_OTP_REQUIRED') {
+                        setRegError(getAuthErrorMessage(resendResult, 'Không thể gửi lại OTP.'));
+                        return;
+                      }
+                      const pendingOtp = authService.getPendingAdminLoginOtp();
+                      if (!pendingOtp) {
+                        setRegError('Không thể gửi lại OTP.');
+                        return;
+                      }
+                      setAdminLoginOtpMaskedEmail(pendingOtp.maskedEmail);
+                      setAdminLoginOtpExpiresAt(new Date(pendingOtp.expiresAt).getTime());
+                      setAdminLoginDevOtpCode(pendingOtp.devOtpCode || null);
+                      setAdminLoginOtpCode('');
+                      setRegSuccess(
+                        pendingOtp.devOtpCode
+                          ? `Đã gửi lại OTP. Mã dev: ${pendingOtp.devOtpCode}`
+                          : `Đã gửi lại OTP đến email ${pendingOtp.maskedEmail}.`,
+                      );
+                    }}
+                    className="text-[10px] font-black uppercase tracking-widest text-brand-primary hover:underline"
+                  >
+                    Gửi lại OTP đăng nhập
+                  </button>
+                </div>
+              )}
 
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Mật khẩu</label>
@@ -673,6 +776,7 @@ export default function AuthView({
                   const newMode = authMode === 'login' ? 'register' : 'login';
                   resetMessages();
                   resetOtpState();
+                  resetAdminLoginOtpState();
                   setAuthMode(newMode);
                   setAuthForm((prev) => ({
                     ...prev,

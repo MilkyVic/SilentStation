@@ -15,6 +15,7 @@ export type AuthAccount = {
     gender: string;
     school: string;
     className: string;
+    phone?: string;
     teacherType: TeacherType;
     subject: string;
   };
@@ -50,6 +51,8 @@ export type ApiStatus = 'active' | 'pending' | 'suspended';
 export type AuthApiLoginRequest = {
   username: string;
   password: string;
+  otpSessionId?: string;
+  otpCode?: string;
 };
 
 export type AuthApiRegisterRequest = {
@@ -63,6 +66,7 @@ export type AuthApiRegisterRequest = {
     gender: string;
     school: string;
     className: string;
+    phone?: string;
     teacherType: TeacherType;
     subject: string;
   };
@@ -81,6 +85,7 @@ export type AuthApiUser = {
     gender: string;
     school: string;
     className: string;
+    phone?: string;
     teacherType: TeacherType;
     subject: string;
   };
@@ -102,7 +107,20 @@ export type AuthApiLoginSuccessResponse = AuthApiUserResponse & {
   session: AuthApiSession;
 };
 
-export type AuthApiSuccessResponse = AuthApiUserResponse | AuthApiLoginSuccessResponse;
+export type AuthApiLoginOtpChallengeResponse = {
+  ok: true;
+  otpRequired: true;
+  otpSessionId: string;
+  expiresAt: string;
+  delivery: 'gmail' | 'dev_console';
+  maskedEmail: string;
+  devOtpCode?: string;
+};
+
+export type AuthApiSuccessResponse =
+  | AuthApiUserResponse
+  | AuthApiLoginSuccessResponse
+  | AuthApiLoginOtpChallengeResponse;
 
 export type AuthApiErrorResponse = {
   ok: false;

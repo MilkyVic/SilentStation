@@ -11,6 +11,7 @@
   AuthApiErrorResponse,
   AuthApiSuccessResponse,
   AuthApiUser,
+  AuthApiLoginOtpChallengeResponse,
   AuthApiRegisterOtpResponse,
   AuthErrorCode,
   AuthResult,
@@ -99,6 +100,14 @@ type ServiceResult<T> = {
     code: AuthErrorCode;
     message: string;
   };
+};
+
+type AdminLoginOtpChallenge = {
+  otpSessionId: string;
+  expiresAt: string;
+  delivery: 'gmail' | 'dev_console';
+  maskedEmail: string;
+  devOtpCode?: string;
 };
 
 const AUTH_TOKEN_KEY = 'tram_an_auth_token';
@@ -195,6 +204,7 @@ const TEST_AUTH_ACCOUNTS: AuthAccount[] = [
 
 let accounts: AuthAccount[] = [...TEST_AUTH_ACCOUNTS];
 let currentSession: Session | null = null;
+let pendingAdminLoginOtp: AdminLoginOtpChallenge | null = null;
 
 const normalizeUsername = (username: string) => username.trim().toLowerCase();
 const makeError = (code: AuthErrorCode, message: string): AuthResult => ({
@@ -276,6 +286,7 @@ const mapApiUserToAccount = (user: AuthApiUser, password = ''): AuthAccount => {
       gender: user.profile.gender || '',
       school: user.profile.school || '',
       className: user.profile.className || '',
+      phone: user.profile.phone || '',
       teacherType,
       subject: role === 'Giáo viên' ? (user.profile.subject || '') : '',
     },
@@ -348,6 +359,15 @@ const parseAuthApiResponse = (
   }
   return payload as AuthApiSuccessResponse | AuthApiErrorResponse;
 };
+
+const isLoginOtpChallengeResponse = (
+  payload: AuthApiSuccessResponse,
+): payload is AuthApiLoginOtpChallengeResponse => (
+  'otpRequired' in payload
+  && payload.otpRequired === true
+  && 'otpSessionId' in payload
+  && 'maskedEmail' in payload
+);
 
 const parseClassCodeCreateResponse = (
   payload: unknown,
@@ -581,6 +601,9 @@ export const authService = {
 
     if (apiResult) {
       if ('error' in apiResult) return { ok: false, error: apiResult.error };
+      if (!('user' in apiResult)) {
+        return makeError('AUTH_SERVER_ERROR', 'Phản hồi đăng ký học sinh từ máy chủ không hợp lệ.');
+      }
       const account = mapApiUserToAccount(apiResult.user, payload.password);
       upsertLocalAccount(account);
       return { ok: true, account };
@@ -612,6 +635,9 @@ export const authService = {
 
     if (apiResult) {
       if ('error' in apiResult) return { ok: false, error: apiResult.error };
+      if (!('user' in apiResult)) {
+        return makeError('AUTH_SERVER_ERROR', 'Phản hồi đăng ký giáo viên từ máy chủ không hợp lệ.');
+      }
       const account = mapApiUserToAccount(apiResult.user, payload.password);
       upsertLocalAccount(account);
       return { ok: true, account };
@@ -625,6 +651,7 @@ export const authService = {
   },
 
   async login(params: { username: string; password: string }): Promise<AuthResult> {
+    pendingAdminLoginOtp = null;
     const apiResult = await callAuthApi('/login', {
       method: 'POST',
       body: JSON.stringify({
@@ -636,8 +663,25 @@ export const authService = {
     if (apiResult) {
       if ('error' in apiResult) return { ok: false, error: apiResult.error };
 
+      if (isLoginOtpChallengeResponse(apiResult)) {
+        pendingAdminLoginOtp = {
+          otpSessionId: apiResult.otpSessionId,
+          expiresAt: apiResult.expiresAt,
+          delivery: apiResult.delivery,
+          maskedEmail: apiResult.maskedEmail,
+          devOtpCode: apiResult.devOtpCode,
+        };
+        return makeError(
+          'AUTH_OTP_REQUIRED',
+          `Tài khoản quản trị cần OTP email (${apiResult.maskedEmail}).`,
+        );
+      }
+
       if (!('session' in apiResult)) {
         return makeError('AUTH_SERVER_ERROR', 'Phản hồi đăng nhập từ máy chủ không hợp lệ.');
+      }
+      if (!('user' in apiResult)) {
+        return makeError('AUTH_SERVER_ERROR', 'Thiếu dữ liệu người dùng khi đăng nhập.');
       }
 
       setStoredToken(apiResult.session.accessToken);
@@ -647,6 +691,7 @@ export const authService = {
         accountId: account.id,
         loggedInAt: Date.now(),
       };
+      pendingAdminLoginOtp = null;
       return { ok: true, account };
     }
 
@@ -657,11 +702,57 @@ export const authService = {
     return localLogin(params);
   },
 
+  getPendingAdminLoginOtp(): AdminLoginOtpChallenge | null {
+    return pendingAdminLoginOtp;
+  },
+
+  clearPendingAdminLoginOtp(): void {
+    pendingAdminLoginOtp = null;
+  },
+
+  async verifyAdminLoginOtp(otpCode: string): Promise<AuthResult> {
+    const pending = pendingAdminLoginOtp;
+    if (!pending?.otpSessionId) {
+      return makeError('AUTH_OTP_REQUIRED', 'Không tìm thấy phiên OTP quản trị.');
+    }
+
+    const apiResult = await callAuthApi('/login', {
+      method: 'POST',
+      body: JSON.stringify({
+        otpSessionId: pending.otpSessionId,
+        otpCode: otpCode.trim(),
+      }),
+    });
+
+    if (apiResult) {
+      if ('error' in apiResult) return { ok: false, error: apiResult.error };
+      if (!('session' in apiResult)) {
+        return makeError('AUTH_SERVER_ERROR', 'Phản hồi xác thực OTP không hợp lệ.');
+      }
+      if (!('user' in apiResult)) {
+        return makeError('AUTH_SERVER_ERROR', 'Thiếu dữ liệu người dùng sau xác thực OTP.');
+      }
+
+      setStoredToken(apiResult.session.accessToken);
+      const account = mapApiUserToAccount(apiResult.user);
+      upsertLocalAccount(account);
+      currentSession = {
+        accountId: account.id,
+        loggedInAt: Date.now(),
+      };
+      pendingAdminLoginOtp = null;
+      return { ok: true, account };
+    }
+
+    return makeError('AUTH_SERVER_ERROR', 'Không kết nối được máy chủ xác thực OTP.');
+  },
+
   async logout(): Promise<void> {
     const token = getStoredToken();
 
     setStoredToken(null);
     currentSession = null;
+    pendingAdminLoginOtp = null;
 
     if (!token) return;
 
@@ -685,6 +776,10 @@ export const authService = {
 
       if (apiResult) {
         if (!apiResult.ok) {
+          setStoredToken(null);
+          return null;
+        }
+        if (!('user' in apiResult)) {
           setStoredToken(null);
           return null;
         }
@@ -853,6 +948,7 @@ export const authService = {
   __resetForTests(): void {
     accounts = [...TEST_AUTH_ACCOUNTS];
     currentSession = null;
+    pendingAdminLoginOtp = null;
     setStoredToken(null);
   },
 };

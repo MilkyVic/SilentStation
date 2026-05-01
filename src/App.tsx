@@ -56,7 +56,9 @@ import {
   Pie
 } from 'recharts';
 import { authService } from './services/authService';
+import { chatService } from './services/chatService';
 import type { AuthAccount, AuthRole } from './types/auth';
+import type { ChatUiMessage } from './types/chat';
 import AuthView from './components/auth/AuthView';
 
 const MOCK_STUDENTS = [
@@ -144,6 +146,14 @@ type TestResult = {
   score: number;
   timestamp: number;
 };
+
+const createChatMessage = (role: 'user' | 'assistant', text: string, sources: string[] = []): ChatUiMessage => ({
+  id: `chat-${role}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+  role,
+  text,
+  createdAt: Date.now(),
+  ...(sources.length ? { sources } : {}),
+});
 
 const TestEditorView = ({ 
   test, 
@@ -4014,6 +4024,12 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatInput, setChatInput] = useState('');
+  const [isChatSending, setIsChatSending] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatUiMessage[]>([
+    createChatMessage('assistant', 'Chào bạn! Mình là bé Trạm. Bạn cần hỗ trợ gì trong hệ thống Trạm an?'),
+  ]);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isHandbookHovered, setIsHandbookHovered] = useState(false);
   const [showApprovalModal, setShowApprovalModal] = useState(false);
@@ -4023,6 +4039,33 @@ export default function App() {
   const [editingTeacherOriginalName, setEditingTeacherOriginalName] = useState('');
   const [adminPasswordPrompt, setAdminPasswordPrompt] = useState<{isOpen: boolean, callback: (() => void) | null}>({ isOpen: false, callback: null });
   const [filterSchoolId, setFilterSchoolId] = useState<string | null>(null);
+
+  const handleSendChatMessage = async () => {
+    const message = chatInput.trim();
+    if (!message || isChatSending) return;
+
+    setChatError(null);
+    setChatMessages((prev) => [...prev, createChatMessage('user', message)]);
+    setChatInput('');
+    setIsChatSending(true);
+
+    const result = await chatService.sendMessage(message);
+    if ('error' in result) {
+      setChatError(result.error.message || 'Chatbot đang bận, vui lòng thử lại.');
+      setChatMessages((prev) => [
+        ...prev,
+        createChatMessage('assistant', 'Mình đang gặp lỗi kết nối. Bạn thử lại sau vài giây nhé.'),
+      ]);
+      setIsChatSending(false);
+      return;
+    }
+
+    setChatMessages((prev) => [
+      ...prev,
+      createChatMessage('assistant', result.data.reply, result.data.sources),
+    ]);
+    setIsChatSending(false);
+  };
 
   const requireAdminPassword = (callback: () => void) => {
     if (userData.role === 'Admin' || userData.role === 'Quản trị viên cấp cao') {
@@ -5694,21 +5737,63 @@ export default function App() {
               </button>
             </div>
             <div className="h-80 p-6 overflow-y-auto bg-gray-50 flex flex-col gap-4">
-              <div className="bg-white p-4 rounded-3xl rounded-tl-none shadow-sm text-sm text-gray-600 max-w-[85%] leading-relaxed">
-                Chào bạn! Trạm an có thể giúp gì cho hành trình khám phá của bạn hôm nay?
-              </div>
-              <div className="bg-brand-primary text-white p-4 rounded-3xl rounded-tr-none shadow-md text-sm max-w-[85%] self-end leading-relaxed">
-                Tôi muốn tìm các mẹo về lối sống lành mạnh.
-              </div>
-              <div className="bg-white p-4 rounded-3xl rounded-tl-none shadow-sm text-sm text-gray-600 max-w-[85%] leading-relaxed">
-                Tuyệt vời! Bạn có thể tìm thấy chúng trong mục "Sức khỏe" của Cẩm nang nhé.
-              </div>
+              {chatMessages.map((item) => (
+                <div
+                  key={item.id}
+                  className={cn(
+                    'p-4 rounded-3xl shadow-sm text-sm max-w-[85%] leading-relaxed',
+                    item.role === 'assistant'
+                      ? 'bg-white text-gray-600 rounded-tl-none'
+                      : 'bg-brand-primary text-white rounded-tr-none self-end shadow-md',
+                  )}
+                >
+                  <p>{item.text}</p>
+                  {item.role === 'assistant' && item.sources && item.sources.length > 0 && (
+                    <p className="mt-2 text-[10px] text-gray-400">
+                      Nguồn: {item.sources.join(', ')}
+                    </p>
+                  )}
+                </div>
+              ))}
+              {isChatSending && (
+                <div className="bg-white p-4 rounded-3xl rounded-tl-none shadow-sm text-sm text-gray-500 max-w-[85%] leading-relaxed">
+                  Bé Trạm đang suy nghĩ...
+                </div>
+              )}
             </div>
-            <div className="p-4 border-t border-gray-100 flex gap-3 bg-white">
-              <input type="text" placeholder="Nhập lời nhắn..." className="flex-1 bg-gray-50 border-none rounded-2xl px-5 py-3 text-sm outline-none focus:ring-2 focus:ring-brand-primary/20" />
-              <button className="w-12 h-12 bg-brand-primary text-white rounded-2xl flex items-center justify-center hover:scale-105 transition-transform shadow-lg shadow-brand-primary/20">
-                <Send size={20} />
-              </button>
+            <div className="p-4 border-t border-gray-100 bg-white space-y-2">
+              {chatError && (
+                <p className="text-[10px] font-bold text-red-500">{chatError}</p>
+              )}
+              <div className="flex gap-3">
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      void handleSendChatMessage();
+                    }
+                  }}
+                  placeholder="Nhập lời nhắn..."
+                  className="flex-1 bg-gray-50 border-none rounded-2xl px-5 py-3 text-sm outline-none focus:ring-2 focus:ring-brand-primary/20"
+                />
+                <button
+                  onClick={() => {
+                    void handleSendChatMessage();
+                  }}
+                  disabled={isChatSending || !chatInput.trim()}
+                  className={cn(
+                    'w-12 h-12 rounded-2xl flex items-center justify-center transition-transform shadow-lg',
+                    isChatSending || !chatInput.trim()
+                      ? 'bg-gray-200 text-gray-400 shadow-gray-200/40 cursor-not-allowed'
+                      : 'bg-brand-primary text-white hover:scale-105 shadow-brand-primary/20',
+                  )}
+                >
+                  <Send size={20} />
+                </button>
+              </div>
             </div>
           </motion.div>
         )}

@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import { AuthHttpError, createClassJoinCode, getCurrentUser, healthCheck, initializeAuthCore, issueRegisterOtp, listActiveClassJoinCodes, listClassJoinCodeEvents, loginAccount, logoutToken, registerAccount, revokeClassJoinCode, } from './auth-core.js';
+import { sendChatMessage } from './chat-core.js';
 const app = express();
 app.use(express.json());
 const CORS_ORIGIN = process.env.AUTH_API_CORS_ORIGIN || '*';
@@ -69,6 +70,10 @@ app.post('/api/class-codes/revoke', asyncHandler(async (req, res) => {
 app.get('/api/class-codes/events', asyncHandler(async (req, res) => {
     const events = await listClassJoinCodeEvents(getBearerToken(req), req.query ?? {});
     res.status(200).json({ ok: true, events });
+}));
+app.post('/api/chat/send', asyncHandler(async (req, res) => {
+    const result = await sendChatMessage(req.body ?? {});
+    res.status(200).json({ ok: true, ...result });
 }));
 app.use((error, _req, res, _next) => {
     if (error instanceof AuthHttpError) {

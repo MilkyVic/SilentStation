@@ -108,6 +108,35 @@ Success response (`200`):
 
 Authenticate with username + password only.
 
+For `admin/superadmin`:
+
+1. First call returns OTP challenge (no session yet):
+
+```json
+{
+  "ok": true,
+  "otpRequired": true,
+  "otpSessionId": "aotp-...",
+  "expiresAt": "ISO datetime",
+  "delivery": "gmail | dev_console",
+  "maskedEmail": "ad***@example.com",
+  "devOtpCode": "123456 (optional, dev only)"
+}
+```
+
+2. Second call confirms OTP:
+
+```json
+{
+  "username": "admin_test",
+  "password": "123456",
+  "otpSessionId": "aotp-...",
+  "otpCode": "123456"
+}
+```
+
+Then response is normal login success with `user + session`.
+
 ### `POST /api/auth/logout`
 
 Invalidate current session/token.

@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS auth_users (
   profile_gender TEXT NOT NULL DEFAULT '',
   profile_school TEXT NOT NULL DEFAULT '',
   profile_class_name TEXT NOT NULL DEFAULT '',
+  profile_phone TEXT NOT NULL DEFAULT '',
   profile_teacher_type TEXT NOT NULL DEFAULT '' CHECK (profile_teacher_type IN ('', 'homeroom', 'subject')),
   profile_subject TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -24,6 +25,9 @@ ALTER TABLE auth_users
 
 ALTER TABLE auth_users
   ADD COLUMN IF NOT EXISTS profile_subject TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE auth_users
+  ADD COLUMN IF NOT EXISTS profile_phone TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_auth_users_username ON auth_users (username);
 
@@ -95,3 +99,21 @@ CREATE TABLE IF NOT EXISTS auth_register_otps (
 
 CREATE INDEX IF NOT EXISTS idx_auth_register_otps_lookup
   ON auth_register_otps (username, role, consumed_at, expires_at DESC);
+
+CREATE TABLE IF NOT EXISTS auth_admin_login_otps (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+  username TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('admin', 'superadmin')),
+  phone TEXT NOT NULL,
+  otp_hash TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  resend_available_at TIMESTAMPTZ NOT NULL,
+  attempts_left INTEGER NOT NULL DEFAULT 5 CHECK (attempts_left >= 0),
+  consumed_at TIMESTAMPTZ NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_admin_login_otps_lookup
+  ON auth_admin_login_otps (user_id, consumed_at, expires_at DESC);

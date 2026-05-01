@@ -32,6 +32,12 @@ const AUTH_REGISTER_OTP_EXPOSE_DEV_CODE = process.env.AUTH_REGISTER_OTP_EXPOSE_D
 const AUTH_GMAIL_SMTP_USER = (process.env.AUTH_GMAIL_SMTP_USER || '').trim();
 const AUTH_GMAIL_SMTP_APP_PASSWORD = (process.env.AUTH_GMAIL_SMTP_APP_PASSWORD || '').trim();
 const AUTH_EMAIL_FROM = (process.env.AUTH_EMAIL_FROM || AUTH_GMAIL_SMTP_USER || 'no-reply@tram-an.vn').trim();
+const AUTH_ADMIN_LOGIN_OTP_TTL_SECONDS = Number(process.env.AUTH_ADMIN_LOGIN_OTP_TTL_SECONDS || 300);
+const AUTH_ADMIN_LOGIN_OTP_MAX_ATTEMPTS = Number(process.env.AUTH_ADMIN_LOGIN_OTP_MAX_ATTEMPTS || 5);
+const AUTH_ADMIN_LOGIN_OTP_RESEND_COOLDOWN_SECONDS = Number(process.env.AUTH_ADMIN_LOGIN_OTP_RESEND_COOLDOWN_SECONDS || 30);
+const AUTH_ADMIN_LOGIN_OTP_EXPOSE_DEV_CODE = process.env.AUTH_ADMIN_LOGIN_OTP_EXPOSE_DEV_CODE
+    ? process.env.AUTH_ADMIN_LOGIN_OTP_EXPOSE_DEV_CODE === 'true'
+    : process.env.NODE_ENV !== 'production';
 const CANONICAL_SCHOOL_NAMES = {
     chuyenHaNoiAmsterdam: 'THPT Chuyên Hà Nội - Amsterdam',
     chuVanAn: 'THPT Chu Văn An',
@@ -87,6 +93,7 @@ CREATE TABLE IF NOT EXISTS auth_users (
   profile_gender TEXT NOT NULL DEFAULT '',
   profile_school TEXT NOT NULL DEFAULT '',
   profile_class_name TEXT NOT NULL DEFAULT '',
+  profile_phone TEXT NOT NULL DEFAULT '',
   profile_teacher_type TEXT NOT NULL DEFAULT '' CHECK (profile_teacher_type IN ('', 'homeroom', 'subject')),
   profile_subject TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -98,6 +105,9 @@ ALTER TABLE auth_users
 
 ALTER TABLE auth_users
   ADD COLUMN IF NOT EXISTS profile_subject TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE auth_users
+  ADD COLUMN IF NOT EXISTS profile_phone TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_auth_users_username ON auth_users (username);
 
@@ -166,6 +176,23 @@ CREATE TABLE IF NOT EXISTS auth_register_otps (
 );
 
 CREATE INDEX IF NOT EXISTS idx_auth_register_otps_lookup ON auth_register_otps (username, role, consumed_at, expires_at DESC);
+
+CREATE TABLE IF NOT EXISTS auth_admin_login_otps (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+  username TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('admin', 'superadmin')),
+  phone TEXT NOT NULL,
+  otp_hash TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  resend_available_at TIMESTAMPTZ NOT NULL,
+  attempts_left INTEGER NOT NULL DEFAULT 5 CHECK (attempts_left >= 0),
+  consumed_at TIMESTAMPTZ NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_admin_login_otps_lookup ON auth_admin_login_otps (user_id, consumed_at, expires_at DESC);
 `;
 const seedAccounts = [
     {
@@ -198,6 +225,7 @@ const seedAccounts = [
             gender: 'Nam',
             school: 'THPT Chuyên Hà Nội - Amsterdam',
             className: '12A1',
+            phone: '',
             teacherType: 'homeroom',
             subject: '',
         },
@@ -215,6 +243,7 @@ const seedAccounts = [
             gender: 'Nu',
             school: 'THPT Chuyên Hà Nội - Amsterdam',
             className: '',
+            phone: '',
             teacherType: 'subject',
             subject: 'toan',
         },
@@ -232,6 +261,7 @@ const seedAccounts = [
             gender: 'Nam',
             school: 'THPT Chuyên Hà Nội - Amsterdam',
             className: '',
+            phone: '0909000001',
             teacherType: '',
             subject: '',
         },
@@ -249,6 +279,7 @@ const seedAccounts = [
             gender: 'Nu',
             school: '',
             className: '',
+            phone: '0909000002',
             teacherType: '',
             subject: '',
         },
@@ -351,6 +382,203 @@ const sendRegisterOtpEmail = async ({ email, otpCode, purpose, fullName }) => {
     });
     return true;
 };
+const sendAdminLoginOtpEmail = async ({ email, otpCode, fullName, role }) => {
+    const mailer = getRegisterOtpMailer();
+    if (!mailer)
+        return false;
+    const subject = role === 'superadmin'
+        ? 'Ma OTP dang nhap Super Admin - Tram An'
+        : 'Ma OTP dang nhap Admin - Tram An';
+    const greetingName = fullName || 'ban';
+    const bodyText = [
+        `Xin chao ${greetingName},`,
+        '',
+        'Ma OTP dang nhap quan tri cua ban la:',
+        otpCode,
+        '',
+        `Ma co hieu luc trong ${Math.floor(AUTH_ADMIN_LOGIN_OTP_TTL_SECONDS / 60)} phut.`,
+        'Neu khong phai ban thuc hien yeu cau nay, vui long doi mat khau tai khoan ngay.',
+        '',
+        'Tram An',
+    ].join('\n');
+    await mailer.sendMail({
+        from: AUTH_EMAIL_FROM,
+        to: email,
+        subject,
+        text: bodyText,
+    });
+    return true;
+};
+const normalizePhone = (value) => String(value || '').replace(/\D+/g, '');
+const maskPhoneForLog = (phone) => {
+    const normalized = normalizePhone(phone);
+    if (normalized.length <= 4)
+        return normalized || '***';
+    return `${'*'.repeat(Math.max(normalized.length - 4, 2))}${normalized.slice(-4)}`;
+};
+const createAdminLoginOtpCode = () => String(Math.floor(100000 + Math.random() * 900000));
+const hashAdminLoginOtp = (sessionId, otpCode) => crypto
+    .createHmac('sha256', AUTH_SESSION_SECRET)
+    .update(`${sessionId}:${otpCode}`)
+    .digest('hex');
+const shouldUseAdminOtp = (role) => role === 'admin' || role === 'superadmin';
+const createLoginSessionResult = async (account) => {
+    const now = Math.floor(Date.now() / 1000);
+    const exp = now + ACCESS_TOKEN_TTL_SECONDS;
+    const tokenPayload = {
+        sub: account.id,
+        username: account.username,
+        role: account.role,
+        status: account.status,
+        iat: now,
+        exp,
+        jti: crypto.randomUUID(),
+    };
+    await insertSession(tokenPayload);
+    const accessToken = signAccessToken(tokenPayload);
+    return {
+        user: toApiUser(account),
+        session: {
+            tokenType: 'Bearer',
+            accessToken,
+            expiresAt: new Date(exp * 1000).toISOString(),
+        },
+    };
+};
+const issueAdminLoginOtp = async (account) => {
+    if (!shouldUseAdminOtp(account.role)) {
+        return createLoginSessionResult(account);
+    }
+    const adminEmail = normalizeEmail(account.profile.email || '');
+    if (!adminEmail || !adminEmail.includes('@')) {
+        throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Tai khoan quan tri chua co email OTP hop le.');
+    }
+    const cooldownCheck = await getPool().query(`
+      SELECT resend_available_at
+      FROM auth_admin_login_otps
+      WHERE user_id = $1
+        AND consumed_at IS NULL
+        AND expires_at > NOW()
+      ORDER BY created_at DESC
+      LIMIT 1
+    `, [account.id]);
+    if (cooldownCheck.rows.length > 0) {
+        const availableAt = new Date(cooldownCheck.rows[0].resend_available_at).getTime();
+        if (availableAt > Date.now()) {
+            const waitSeconds = Math.ceil((availableAt - Date.now()) / 1000);
+            throw new AuthHttpError(429, 'AUTH_OTP_RATE_LIMIT', `Vui long cho ${waitSeconds}s de gui lai OTP.`);
+        }
+    }
+    const otpSessionId = `aotp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const otpCode = createAdminLoginOtpCode();
+    const otpHash = hashAdminLoginOtp(otpSessionId, otpCode);
+    const expiresAt = new Date(Date.now() + AUTH_ADMIN_LOGIN_OTP_TTL_SECONDS * 1000);
+    const resendAvailableAt = new Date(Date.now() + AUTH_ADMIN_LOGIN_OTP_RESEND_COOLDOWN_SECONDS * 1000);
+    await getPool().query(`
+      INSERT INTO auth_admin_login_otps (
+        id, user_id, username, role, phone, otp_hash, expires_at, resend_available_at, attempts_left
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9
+      )
+    `, [
+        otpSessionId,
+        account.id,
+        account.username,
+        account.role,
+        adminEmail,
+        otpHash,
+        expiresAt,
+        resendAvailableAt,
+        AUTH_ADMIN_LOGIN_OTP_MAX_ATTEMPTS,
+    ]);
+    let delivery = 'dev_console';
+    try {
+        const sent = await sendAdminLoginOtpEmail({
+            email: adminEmail,
+            otpCode,
+            fullName: account.profile.name || account.username,
+            role: account.role,
+        });
+        delivery = sent ? 'gmail' : 'dev_console';
+        if (!sent && process.env.NODE_ENV === 'production') {
+            throw new AuthHttpError(500, 'AUTH_SERVER_ERROR', 'OTP email chua duoc cau hinh Gmail SMTP.');
+        }
+    }
+    catch (error) {
+        console.error('[auth-admin-otp] send email failed', error);
+        if (process.env.NODE_ENV === 'production') {
+            throw new AuthHttpError(500, 'AUTH_SERVER_ERROR', 'Khong the gui OTP qua email.');
+        }
+    }
+    if (delivery === 'dev_console') {
+        console.log(`[auth-admin-otp] OTP ${otpCode} for ${account.username} -> ${maskEmailForLog(adminEmail)}`);
+    }
+    return {
+        otpRequired: true,
+        otpSessionId,
+        expiresAt: expiresAt.toISOString(),
+        delivery,
+        maskedEmail: maskEmailForLog(adminEmail),
+        ...(AUTH_ADMIN_LOGIN_OTP_EXPOSE_DEV_CODE ? { devOtpCode: otpCode } : {}),
+    };
+};
+const verifyAdminLoginOtpAndCreateSession = async (payload) => {
+    const otpSessionId = typeof payload.otpSessionId === 'string' ? payload.otpSessionId.trim() : '';
+    const otpCode = typeof payload.otpCode === 'string' ? payload.otpCode.trim() : '';
+    if (!otpSessionId || !otpCode) {
+        throw new AuthHttpError(400, 'AUTH_OTP_REQUIRED', 'Vui long nhap OTP dang nhap.');
+    }
+    const sessionResult = await getPool().query(`
+      SELECT
+        id,
+        user_id,
+        username,
+        role,
+        phone,
+        otp_hash,
+        expires_at,
+        attempts_left,
+        consumed_at
+      FROM auth_admin_login_otps
+      WHERE id = $1
+      LIMIT 1
+    `, [otpSessionId]);
+    if (sessionResult.rows.length === 0) {
+        throw new AuthHttpError(400, 'AUTH_OTP_INVALID', 'Phien OTP dang nhap khong ton tai.');
+    }
+    const otpSession = sessionResult.rows[0];
+    if (otpSession.consumed_at) {
+        throw new AuthHttpError(400, 'AUTH_OTP_INVALID', 'Ma OTP da duoc su dung.');
+    }
+    if (new Date(otpSession.expires_at).getTime() <= Date.now()) {
+        throw new AuthHttpError(400, 'AUTH_OTP_EXPIRED', 'Ma OTP da het han.');
+    }
+    const incomingHash = hashAdminLoginOtp(otpSessionId, otpCode);
+    if (incomingHash !== otpSession.otp_hash) {
+        const attemptsLeft = Math.max(Number(otpSession.attempts_left || 0) - 1, 0);
+        await getPool().query(`
+          UPDATE auth_admin_login_otps
+          SET attempts_left = $2, updated_at = NOW()
+          WHERE id = $1
+        `, [otpSessionId, attemptsLeft]);
+        throw new AuthHttpError(400, 'AUTH_OTP_INVALID', attemptsLeft <= 0
+            ? 'Ma OTP sai qua so lan cho phep. Vui long yeu cau ma moi.'
+            : 'Ma OTP khong chinh xac.');
+    }
+    const account = await findAccountById(otpSession.user_id);
+    if (!account || !shouldUseAdminOtp(account.role)) {
+        throw new AuthHttpError(400, 'AUTH_INVALID_ROLE', 'Phien OTP khong dung vai tro quan tri.');
+    }
+    if (account.status !== 'active') {
+        throw new AuthHttpError(403, 'AUTH_PENDING_APPROVAL', 'Tai khoan chua duoc kich hoat.');
+    }
+    await getPool().query(`
+      UPDATE auth_admin_login_otps
+      SET consumed_at = NOW(), updated_at = NOW()
+      WHERE id = $1
+    `, [otpSessionId]);
+    return createLoginSessionResult(account);
+};
 const encodeBase64Url = (value) => Buffer.from(value).toString('base64url');
 const decodeBase64Url = (value) => Buffer.from(value, 'base64url').toString('utf8');
 const signAccessToken = (payload) => {
@@ -401,6 +629,7 @@ const mapUserRow = (row) => ({
         gender: row.profile_gender,
         school: normalizeSchoolName(row.profile_school),
         className: row.profile_class_name,
+        phone: row.profile_phone || '',
         teacherType: row.profile_teacher_type || (row.profile_class_name ? 'homeroom' : ''),
         subject: row.profile_subject || '',
     },
@@ -477,6 +706,7 @@ const findAccountByUsername = async (username) => {
         profile_gender,
         profile_school,
         profile_class_name,
+        profile_phone,
         profile_teacher_type,
         profile_subject
       FROM auth_users
@@ -501,6 +731,7 @@ const findAccountById = async (id) => {
         profile_gender,
         profile_school,
         profile_class_name,
+        profile_phone,
         profile_teacher_type,
         profile_subject
       FROM auth_users
@@ -525,11 +756,12 @@ const insertAccount = async (account) => {
         profile_gender,
         profile_school,
         profile_class_name,
+        profile_phone,
         profile_teacher_type,
         profile_subject
       ) VALUES (
         $1, $2, $3, $4, $5,
-        $6, $7, $8, $9, $10, $11, $12, $13
+        $6, $7, $8, $9, $10, $11, $12, $13, $14
       )
     `, [
         account.id,
@@ -543,6 +775,7 @@ const insertAccount = async (account) => {
         account.profile.gender,
         normalizeSchoolName(account.profile.school),
         account.profile.className,
+        account.profile.phone || '',
         account.profile.teacherType || '',
         account.profile.subject || '',
     ]);
@@ -561,11 +794,12 @@ const insertAccountWithClient = async (client, account) => {
         profile_gender,
         profile_school,
         profile_class_name,
+        profile_phone,
         profile_teacher_type,
         profile_subject
       ) VALUES (
         $1, $2, $3, $4, $5,
-        $6, $7, $8, $9, $10, $11, $12, $13
+        $6, $7, $8, $9, $10, $11, $12, $13, $14
       )
     `, [
         account.id,
@@ -579,6 +813,7 @@ const insertAccountWithClient = async (client, account) => {
         account.profile.gender,
         normalizeSchoolName(account.profile.school),
         account.profile.className,
+        account.profile.phone || '',
         account.profile.teacherType || '',
         account.profile.subject || '',
     ]);
@@ -670,11 +905,12 @@ export const initializeAuthCore = async () => {
             profile_gender,
             profile_school,
             profile_class_name,
+            profile_phone,
             profile_teacher_type,
             profile_subject
           ) VALUES (
             $1, $2, $3, $4, $5,
-            $6, $7, $8, $9, $10, $11, $12, $13
+            $6, $7, $8, $9, $10, $11, $12, $13, $14
           )
           ON CONFLICT (username)
           DO UPDATE SET
@@ -687,6 +923,7 @@ export const initializeAuthCore = async () => {
             profile_gender = EXCLUDED.profile_gender,
             profile_school = EXCLUDED.profile_school,
             profile_class_name = EXCLUDED.profile_class_name,
+            profile_phone = EXCLUDED.profile_phone,
             profile_teacher_type = EXCLUDED.profile_teacher_type,
             profile_subject = EXCLUDED.profile_subject,
             updated_at = NOW()
@@ -702,6 +939,7 @@ export const initializeAuthCore = async () => {
                 seed.profile.gender,
                 seed.profile.school,
                 seed.profile.className,
+                seed.profile.phone || '',
                 seed.profile.teacherType || '',
                 seed.profile.subject || '',
             ]);
@@ -934,6 +1172,7 @@ export const registerAccount = async (payload) => {
             gender: payload.profile.gender || '',
             school: normalizedSchool,
             className: normalizedClassName,
+            phone: String(payload.profile.phone || '').trim(),
             teacherType,
             subject: normalizedSubject,
         },
@@ -1253,6 +1492,9 @@ export const listClassJoinCodeEvents = async (token, input = {}) => {
 };
 export const loginAccount = async (payload) => {
     await initializeAuthCore();
+    if (typeof payload?.otpSessionId === 'string' || typeof payload?.otpCode === 'string') {
+        return verifyAdminLoginOtpAndCreateSession(payload);
+    }
     const normalizedUsername = typeof payload.username === 'string'
         ? normalizeUsername(payload.username)
         : '';
@@ -1263,27 +1505,10 @@ export const loginAccount = async (payload) => {
     if (account.status !== 'active') {
         throw new AuthHttpError(403, 'AUTH_PENDING_APPROVAL', 'Tai khoan chua duoc kich hoat.');
     }
-    const now = Math.floor(Date.now() / 1000);
-    const exp = now + ACCESS_TOKEN_TTL_SECONDS;
-    const tokenPayload = {
-        sub: account.id,
-        username: account.username,
-        role: account.role,
-        status: account.status,
-        iat: now,
-        exp,
-        jti: crypto.randomUUID(),
-    };
-    await insertSession(tokenPayload);
-    const accessToken = signAccessToken(tokenPayload);
-    return {
-        user: toApiUser(account),
-        session: {
-            tokenType: 'Bearer',
-            accessToken,
-            expiresAt: new Date(exp * 1000).toISOString(),
-        },
-    };
+    if (shouldUseAdminOtp(account.role)) {
+        return issueAdminLoginOtp(account);
+    }
+    return createLoginSessionResult(account);
 };
 export const getCurrentUser = async (token) => {
     await initializeAuthCore();
