@@ -12,7 +12,8 @@
     "lint": "tsc --noEmit",
     "test:auth": "tsx --test src/services/authService.test.ts",
     "build:api": "tsc -p tsconfig.server.json",
-    "start:api": "node dist-server/auth-server.js"
+    "start:api": "node dist-server/auth-server.js",
+    "loadtest:pilot": "tsx server/loadtest/pilot-800.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

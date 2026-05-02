@@ -113,6 +113,7 @@ type AdminLoginOtpChallenge = {
 const AUTH_TOKEN_KEY = 'tram_an_auth_token';
 const AUTH_API_PREFIX = '/api/auth';
 const CLASS_CODE_API_PREFIX = '/api/class-codes';
+const ADMIN_API_PREFIX = '/api/admins';
 
 const TEST_AUTH_ACCOUNTS: AuthAccount[] = [
   {
@@ -185,13 +186,13 @@ const TEST_AUTH_ACCOUNTS: AuthAccount[] = [
   },
   {
     id: 'acc-superadmin-1',
-    username: 'superadmin_test',
+    username: 'superadmin',
     password: '123456',
     role: 'Quản trị viên cấp cao',
     status: 'active',
     profile: {
-      name: 'Super Admin test',
-      email: 'superadmin_test@tram-an.vn',
+      name: 'Superadmin',
+      email: 'hello.traman@gmail.com',
       birthYear: '1983',
       gender: 'Nữ',
       school: '',
@@ -491,9 +492,14 @@ const callAuthApi = async (
 };
 
 const buildClassCodeApiUrl = (path: string) => `${getAuthApiBaseUrl()}${CLASS_CODE_API_PREFIX}${path}`;
+const buildAdminApiUrl = (path: string) => `${getAuthApiBaseUrl()}${ADMIN_API_PREFIX}${path}`;
 
 const callClassCodeApi = async (path: string, init?: RequestInit): Promise<unknown | null> => {
   return callApi(buildClassCodeApiUrl(path), init);
+};
+
+const callAdminApi = async (path: string, init?: RequestInit): Promise<unknown | null> => {
+  return callApi(buildAdminApiUrl(path), init);
 };
 const localRegisterStudent = (payload: RegisterPayload): AuthResult => {
   if (findAccount(payload.username)) {
@@ -544,6 +550,10 @@ const localGetCurrentSession = (): AuthAccount | null => {
 };
 
 export const authService = {
+  getAccessToken(): string | null {
+    return getStoredToken();
+  },
+
   findAccountByUsername(username: string): AuthAccount | null {
     return findAccount(username) || null;
   },
@@ -918,6 +928,98 @@ export const authService = {
       data: mapClassJoinCode(apiResult.code),
     };
   },
+
+  async listAdmins(): Promise<ServiceResult<AuthAccount[]>> {
+    const token = getStoredToken();
+    if (!token) {
+      return makeError('AUTH_INVALID_CREDENTIALS', 'Phiên đăng nhập không hợp lệ.') as ServiceResult<AuthAccount[]>;
+    }
+
+    const payload = await callAdminApi('', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!payload || typeof payload !== 'object') {
+      return makeError('AUTH_SERVER_ERROR', 'Không kết nối được máy chủ quản lý admin.') as ServiceResult<AuthAccount[]>;
+    }
+
+    const result = payload as {
+      ok?: boolean;
+      error?: { code?: AuthErrorCode; message?: string };
+      admins?: AuthApiUser[];
+    };
+
+    if (!result.ok) {
+      return {
+        ok: false,
+        error: {
+          code: result.error?.code || 'AUTH_SERVER_ERROR',
+          message: result.error?.message || 'Không tải được danh sách admin.',
+        },
+      };
+    }
+
+    const admins = Array.isArray(result.admins)
+      ? result.admins.map((item) => mapApiUserToAccount(item))
+      : [];
+
+    admins.forEach(upsertLocalAccount);
+    return { ok: true, data: admins };
+  },
+
+  async createAdmin(payload: {
+    username: string;
+    password: string;
+    profile: {
+      name: string;
+      email: string;
+      birthYear?: string;
+      gender?: string;
+      school: string;
+      phone?: string;
+    };
+  }): Promise<ServiceResult<AuthAccount>> {
+    const token = getStoredToken();
+    if (!token) {
+      return makeError('AUTH_INVALID_CREDENTIALS', 'Phiên đăng nhập không hợp lệ.') as ServiceResult<AuthAccount>;
+    }
+
+    const response = await callAdminApi('', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response || typeof response !== 'object') {
+      return makeError('AUTH_SERVER_ERROR', 'Không kết nối được máy chủ tạo admin.') as ServiceResult<AuthAccount>;
+    }
+
+    const result = response as {
+      ok?: boolean;
+      error?: { code?: AuthErrorCode; message?: string };
+      admin?: AuthApiUser;
+    };
+
+    if (!result.ok || !result.admin) {
+      return {
+        ok: false,
+        error: {
+          code: result.error?.code || 'AUTH_SERVER_ERROR',
+          message: result.error?.message || 'Không tạo được admin mới.',
+        },
+      };
+    }
+
+    const account = mapApiUserToAccount(result.admin, payload.password);
+    upsertLocalAccount(account);
+    return { ok: true, data: account };
+  },
+
   approveTeacherAccount(
     username: string,
     profileUpdates?: Partial<AuthAccount['profile']>,

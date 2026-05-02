@@ -270,13 +270,13 @@ const seedAccounts = [
     },
     {
         id: 'acc-superadmin-1',
-        username: 'superadmin_test',
+        username: 'superadmin',
         password: '123456',
         role: 'superadmin',
         status: 'active',
         profile: {
-            name: 'Super Admin test',
-            email: 'superadmin_test@tram-an.vn',
+            name: 'Superadmin',
+            email: 'hello.traman@gmail.com',
             birthYear: '1983',
             gender: 'Nu',
             school: '',
@@ -918,8 +918,9 @@ export const initializeAuthCore = async () => {
             $1, $2, $3, $4, $5,
             $6, $7, $8, $9, $10, $11, $12, $13, $14
           )
-          ON CONFLICT (username)
+          ON CONFLICT (id)
           DO UPDATE SET
+            username = EXCLUDED.username,
             password_hash = EXCLUDED.password_hash,
             role = EXCLUDED.role,
             status = EXCLUDED.status,
@@ -1295,6 +1296,107 @@ export const registerAccount = async (payload) => {
     finally {
         client.release();
     }
+};
+const validateCreateAdminPayload = (payload) => {
+    const normalizedUsername = typeof payload?.username === 'string'
+        ? normalizeUsername(payload.username)
+        : '';
+    const password = typeof payload?.password === 'string' ? payload.password : '';
+    const name = typeof payload?.profile?.name === 'string' ? payload.profile.name.trim() : '';
+    const email = normalizeEmail(payload?.profile?.email || `${normalizedUsername}@tram-an.vn`);
+    const school = normalizeSchoolName(typeof payload?.profile?.school === 'string' ? payload.profile.school : '');
+    const birthYear = typeof payload?.profile?.birthYear === 'string' ? payload.profile.birthYear.trim() : '';
+    const gender = typeof payload?.profile?.gender === 'string' ? payload.profile.gender.trim() : '';
+    const phone = typeof payload?.profile?.phone === 'string' ? payload.profile.phone.trim() : '';
+    if (!normalizedUsername) {
+        throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Thieu ten dang nhap admin.');
+    }
+    if (!password || password.length < 6) {
+        throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Mat khau admin toi thieu 6 ky tu.');
+    }
+    if (!name) {
+        throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Thieu ho ten admin.');
+    }
+    if (!email || !email.includes('@')) {
+        throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Email admin khong hop le.');
+    }
+    if (!school) {
+        throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Thieu ten truong cho admin.');
+    }
+    return {
+        normalizedUsername,
+        password,
+        name,
+        email,
+        school,
+        birthYear,
+        gender,
+        phone,
+    };
+};
+export const listAdminAccounts = async (token) => {
+    await initializeAuthCore();
+    const actor = await getCurrentUser(token);
+    if (actor.role !== 'superadmin') {
+        throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Chi Superadmin moi duoc xem danh sach Admin.');
+    }
+    const result = await getPool().query(`
+      SELECT
+        id,
+        username,
+        password_hash,
+        role,
+        status,
+        profile_name,
+        profile_email,
+        profile_birth_year,
+        profile_gender,
+        profile_school,
+        profile_class_name,
+        profile_phone,
+        profile_teacher_type,
+        profile_subject
+      FROM auth_users
+      WHERE role = 'admin'
+      ORDER BY created_at ASC
+    `);
+    return {
+        admins: result.rows.map((row) => toApiUser(mapUserRow(row))),
+    };
+};
+export const createAdminAccount = async (token, payload) => {
+    await initializeAuthCore();
+    const actor = await getCurrentUser(token);
+    if (actor.role !== 'superadmin') {
+        throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Chi Superadmin moi duoc tao Admin.');
+    }
+    const parsed = validateCreateAdminPayload(payload);
+    const existing = await findAccountByUsername(parsed.normalizedUsername);
+    if (existing) {
+        throw new AuthHttpError(409, 'AUTH_USERNAME_EXISTS', 'Ten dang nhap da ton tai.');
+    }
+    const account = {
+        id: `acc-admin-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        username: parsed.normalizedUsername,
+        passwordHash: hashPassword(parsed.password),
+        role: 'admin',
+        status: 'active',
+        profile: {
+            name: parsed.name,
+            email: parsed.email,
+            birthYear: parsed.birthYear,
+            gender: parsed.gender,
+            school: parsed.school,
+            className: '',
+            phone: parsed.phone,
+            teacherType: '',
+            subject: '',
+        },
+    };
+    await insertAccount(account);
+    return {
+        admin: toApiUser(account),
+    };
 };
 export const createClassJoinCode = async (token, input = {}) => {
     await initializeAuthCore();

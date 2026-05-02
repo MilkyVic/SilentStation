@@ -164,7 +164,7 @@ Ghi nhớ tài khoản test hiện tại (chỉ dùng nội bộ dev/staging):
 2. `teacher_test / 123456`
 3. `teacher_subject_test / 123456`
 4. `admin_test / 123456`
-5. `superadmin_test / 123456`
+5. `superadmin / 123456`
 
 ## 11) Mục tiêu demo 1 trường (800 người) và thứ tự ưu tiên
 

@@ -57,6 +57,7 @@ import {
 } from 'recharts';
 import { authService } from './services/authService';
 import { chatService } from './services/chatService';
+import { testService } from './services/testService';
 import type { AuthAccount, AuthRole } from './types/auth';
 import type { ChatUiMessage } from './types/chat';
 import AuthView from './components/auth/AuthView';
@@ -144,6 +145,9 @@ type TestResult = {
   userRole: string;
   userClass?: string;
   score: number;
+  scoreLevel?: string;
+  scorePayload?: Record<string, unknown>;
+  suggestDass21?: boolean;
   timestamp: number;
 };
 
@@ -154,6 +158,76 @@ const createChatMessage = (role: 'user' | 'assistant', text: string, sources: st
   createdAt: Date.now(),
   ...(sources.length ? { sources } : {}),
 });
+
+const CORE_TEST_IDS = ['1', '2', '3', '4', '5'];
+const CORE_TEST_ORDER_INDEX = new Map(CORE_TEST_IDS.map((id, index) => [id, index]));
+const sortTestsKeepingCoreFirst = <T extends { id?: string | number }>(items: T[]) => (
+  items
+    .map((test, originalIndex) => {
+      const id = String(test?.id ?? '');
+      const coreRank = CORE_TEST_ORDER_INDEX.has(id)
+        ? (CORE_TEST_ORDER_INDEX.get(id) as number)
+        : Number.MAX_SAFE_INTEGER;
+      return { test, originalIndex, coreRank };
+    })
+    .sort((a, b) => {
+      if (a.coreRank !== b.coreRank) return a.coreRank - b.coreRank;
+      return a.originalIndex - b.originalIndex;
+    })
+    .map((item) => item.test)
+);
+
+const mapApiAudienceToLabel = (audience: string) => {
+  if (audience === 'student') return 'Học sinh';
+  if (audience === 'teacher') return 'Giáo viên';
+  return 'Cả hai';
+};
+
+const mapLabelToApiAudience = (label: string): 'student' | 'teacher' | 'both' => {
+  if (label === 'Học sinh') return 'student';
+  if (label === 'Giáo viên') return 'teacher';
+  return 'both';
+};
+
+const normalizeTestFromApiTemplate = (template: any, existingTest?: any) => {
+  const localQuestionCount = Array.isArray(existingTest?.questionList) ? existingTest.questionList.length : 0;
+  const apiQuestionCount = Number(template?.questionCount || 0);
+  const baseQuestionCount = apiQuestionCount > 0 ? apiQuestionCount : localQuestionCount;
+  const time =
+    existingTest?.time
+    || (String(template.templateCode || '').toUpperCase() === 'DASS21' ? '20 phút' : '10 phút');
+
+  return {
+    id: String(template.id),
+    title: template.title || existingTest?.title || 'Bài test',
+    desc: template.description || existingTest?.desc || '',
+    time,
+    questions: existingTest?.questions || `${baseQuestionCount > 0 ? baseQuestionCount : '?'} câu`,
+    icon: existingTest?.icon || 'Zap',
+    color: existingTest?.color || 'bg-brand-primary',
+    isOpen: template.isActive !== false,
+    isPredefined: Boolean(template.isSystem),
+    versionCount: Number(template.versionCount || existingTest?.versionCount || 0),
+    lastVersionAt: template.lastVersionAt || existingTest?.lastVersionAt || null,
+    targetAudience: mapApiAudienceToLabel(String(template.targetAudience || 'both')),
+    questionCount: baseQuestionCount,
+    questionList: Array.isArray(existingTest?.questionList) ? existingTest.questionList : [],
+  };
+};
+
+const mapApiQuestionListToUi = (questionList: any[]) => (
+  questionList.map((question: any, index: number) => ({
+    id: String(question?.id || `q-${index + 1}`),
+    text: String(question?.text || ''),
+    options: Array.isArray(question?.options)
+      ? question.options.map((option: any, optionIndex: number) => ({
+        id: String(option?.id || `o-${index + 1}-${optionIndex + 1}`),
+        text: String(option?.text || ''),
+        score: Number(option?.score || 0),
+      }))
+      : [],
+  }))
+);
 
 const TestEditorView = ({ 
   test, 
@@ -1036,7 +1110,11 @@ const TestTakingView = ({
 }: { 
   test: any, 
   userData: any,
-  onComplete: (score: number) => void, 
+  onComplete: (payload: { test: any; answers: number[]; score: number }) => Promise<{
+    scoreTotal: number;
+    scoreLevel: string;
+    suggestDass21: boolean;
+  }>, 
   onBack: () => void,
   onTakeDass21?: () => void
 }) => {
@@ -1044,9 +1122,13 @@ const TestTakingView = ({
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [isFinished, setIsFinished] = useState(false);
   const [finalScore, setFinalScore] = useState(0);
+  const [finalScoreLevel, setFinalScoreLevel] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
   const [showDassPrompt, setShowDassPrompt] = useState(false);
 
   const questions = test.questionList || [];
+  const draftKey = `tram_an_test_draft_${userData?.id || 'unknown'}_${String(test?.id || '')}`;
 
   const getEvaluation = (title: string, score: number) => {
     const t = title.toUpperCase();
@@ -1082,21 +1164,73 @@ const TestTakingView = ({
   };
 
   const handleSelectOption = (qId: string, score: number) => {
-    setAnswers({ ...answers, [qId]: score });
+    const nextAnswers = { ...answers, [qId]: score };
+    setAnswers(nextAnswers);
+    setSubmitError('');
+
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(draftKey, JSON.stringify(nextAnswers));
+    }
   };
 
-  const handleNext = () => {
+  useEffect(() => {
+    setCurrentQuestionIndex(0);
+    setAnswers({});
+    setIsFinished(false);
+    setFinalScore(0);
+    setFinalScoreLevel('');
+    setSubmitError('');
+    setShowDassPrompt(false);
+
+    if (typeof window === 'undefined') return;
+    const rawDraft = window.localStorage.getItem(draftKey);
+    if (!rawDraft) return;
+
+    try {
+      const parsed = JSON.parse(rawDraft) as Record<string, number>;
+      if (!parsed || typeof parsed !== 'object') return;
+      setAnswers(parsed);
+
+      const answeredCount = Object.keys(parsed).length;
+      if (answeredCount > 0 && questions.length > 0) {
+        setCurrentQuestionIndex(Math.min(answeredCount - 1, questions.length - 1));
+      }
+    } catch {
+      window.localStorage.removeItem(draftKey);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey, test?.id]);
+
+  const handleNext = async () => {
+    if (isSubmitting) return;
+
     if (currentQuestionIndex < questions.length - 1) {
       setCurrentQuestionIndex(currentQuestionIndex + 1);
     } else {
-      const totalScore = Object.values(answers).reduce((sum, s) => sum + s, 0);
-      setFinalScore(totalScore);
-      setIsFinished(true);
-      onComplete(totalScore);
+      const answerList = questions.map((question: any) => Number(answers[question.id] ?? 0));
+      const totalScore = answerList.reduce((sum, s) => sum + s, 0);
+      setSubmitError('');
+      setIsSubmitting(true);
 
-      const t = test.title.toUpperCase();
-      if ((t.includes('PHQ-9') || t.includes('GAD-7')) && totalScore >= 10) {
-        setShowDassPrompt(true);
+      try {
+        const result = await onComplete({ test, answers: answerList, score: totalScore });
+        const resolvedScore = Number.isFinite(Number(result.scoreTotal)) ? Number(result.scoreTotal) : totalScore;
+
+        setFinalScore(resolvedScore);
+        setFinalScoreLevel(result.scoreLevel || getEvaluation(test.title, resolvedScore));
+        setIsFinished(true);
+
+        if (typeof window !== 'undefined') {
+          window.localStorage.removeItem(draftKey);
+        }
+
+        if (result.suggestDass21) {
+          setShowDassPrompt(true);
+        }
+      } catch (error) {
+        setSubmitError(error instanceof Error ? error.message : 'Không thể nộp bài. Vui lòng thử lại.');
+      } finally {
+        setIsSubmitting(false);
       }
     }
   };
@@ -1134,7 +1268,9 @@ const TestTakingView = ({
           <p className="text-[11px] font-black text-gray-400 uppercase tracking-[0.3em] mb-4">TỔNG ĐIỂM CỦA BẠN</p>
           <p className="text-7xl font-black text-brand-primary mb-6">{finalScore}</p>
           <div className="inline-block px-6 py-3 bg-brand-primary/10 rounded-2xl">
-            <p className="text-lg font-bold text-brand-primary">{getEvaluation(test.title, finalScore)}</p>
+            <p className="text-lg font-bold text-brand-primary">
+              {finalScoreLevel || getEvaluation(test.title, finalScore)}
+            </p>
           </div>
         </div>
 
@@ -1232,17 +1368,24 @@ const TestTakingView = ({
         <div className="mt-16 flex items-center justify-between">
           <button 
             onClick={handlePrev}
-            disabled={currentQuestionIndex === 0}
+            disabled={currentQuestionIndex === 0 || isSubmitting}
             className="px-8 py-4 text-gray-400 font-black text-xs uppercase tracking-widest disabled:opacity-30"
           >
             QUAY LẠI
           </button>
+          {submitError && (
+            <p className="text-xs font-bold text-red-500">{submitError}</p>
+          )}
           <button 
-            onClick={handleNext}
-            disabled={answers[currentQuestion.id] === undefined}
+            onClick={() => {
+              void handleNext();
+            }}
+            disabled={answers[currentQuestion.id] === undefined || isSubmitting}
             className="px-10 py-4 bg-brand-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-brand-primary/20 hover:scale-105 transition-all disabled:opacity-50 disabled:scale-100"
           >
-            {currentQuestionIndex === questions.length - 1 ? "HOÀN THÀNH" : "TIẾP THEO"}
+            {isSubmitting
+              ? 'ĐANG NỘP...'
+              : (currentQuestionIndex === questions.length - 1 ? 'HOÀN THÀNH' : 'TIẾP THEO')}
           </button>
         </div>
       </motion.div>
@@ -1254,16 +1397,22 @@ const StudentTestsView = ({
   tests, 
   onTakeTest,
   userData,
+  isLoadingTests,
+  testsError,
   setCurrentView,
   onLogout
 }: { 
   tests: any[], 
-  onTakeTest: (test: any) => void,
+  onTakeTest: (test: any) => Promise<void> | void,
   userData: any,
+  isLoadingTests?: boolean,
+  testsError?: string,
   setCurrentView: (view: View) => void,
   onLogout: () => void
 }) => {
-  const filteredTests = tests.filter(t => t.isOpen && (t.targetAudience === 'Cả hai' || t.targetAudience === userData.role));
+  const filteredTests = sortTestsKeepingCoreFirst(
+    tests.filter((t) => (t.isOpen !== false) && (t.targetAudience === 'Cả hai' || t.targetAudience === userData.role)),
+  );
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-20">
@@ -1282,6 +1431,17 @@ const StudentTestsView = ({
           Khám phá những góc khuất trong tâm hồn, định hướng tương lai và tìm ra cách cân bằng cuộc sống học đường.
         </p>
       </div>
+
+      {isLoadingTests && (
+        <div className="text-center py-10">
+          <p className="text-sm font-bold text-gray-500">Đang đồng bộ danh mục bài test...</p>
+        </div>
+      )}
+      {testsError && (
+        <div className="mb-8 p-4 rounded-2xl bg-red-50 border border-red-100 text-red-600 text-sm font-bold text-center">
+          {testsError}
+        </div>
+      )}
 
       {filteredTests.length === 0 ? (
         <div className="text-center py-20 bg-gray-50 rounded-[4rem] border border-dashed border-gray-200">
@@ -1317,7 +1477,9 @@ const StudentTestsView = ({
               </div>
 
               <button 
-                onClick={() => onTakeTest(test)}
+                onClick={() => {
+                  void onTakeTest(test);
+                }}
                 className="w-full py-5 bg-brand-primary text-white rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl shadow-brand-primary/20 hover:scale-[1.02] active:scale-95 transition-all"
               >
                 BẮT ĐẦU LÀM TEST
@@ -1500,7 +1662,8 @@ const AdminListView = ({
   onViewStudentsOfSchool,
   setFilterSchoolId,
   onDeleteAdmin,
-  onChangePassword
+  onChangePassword,
+  onCreateAdmin
 }: { 
   admins: any[], 
   onBack: () => void,
@@ -1511,7 +1674,8 @@ const AdminListView = ({
   onViewStudentsOfSchool: (schoolId: string) => void,
   setFilterSchoolId: (id: string | null) => void,
   onDeleteAdmin?: (id: string) => void,
-  onChangePassword?: (id: string, name: string) => void
+  onChangePassword?: (id: string, name: string) => void,
+  onCreateAdmin?: () => void
 }) => {
   const [selectedAdmin, setSelectedAdmin] = useState<any>(null);
 
@@ -1535,6 +1699,14 @@ const AdminListView = ({
             <h2 className="text-4xl font-display font-black text-brand-primary">Quản lý Admin</h2>
             <p className="text-gray-500">Mỗi Admin đại diện cho một trường học trong hệ thống.</p>
           </div>
+          {userData.role === 'Quản trị viên cấp cao' && (
+            <button
+              onClick={onCreateAdmin}
+              className="ml-auto px-6 py-3 rounded-2xl bg-brand-primary text-white text-xs font-black uppercase tracking-widest shadow-lg shadow-brand-primary/20 hover:scale-[1.02] transition-all"
+            >
+              Thêm Admin
+            </button>
+          )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
@@ -2287,6 +2459,7 @@ const TestListView = ({
   onLogout: () => void,
   setFilterSchoolId: (id: string | null) => void
 }) => {
+  const orderedTests = sortTestsKeepingCoreFirst(tests);
   return (
     <ManagementLayout 
       userData={userData} 
@@ -2310,7 +2483,7 @@ const TestListView = ({
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-          {tests.map((test) => (
+          {orderedTests.map((test) => (
             <div 
               key={test.id} 
               className={cn(
@@ -2347,6 +2520,9 @@ const TestListView = ({
               
               <h3 className="text-xl font-black text-brand-primary mb-2">{test.title}</h3>
               <p className="text-sm text-gray-400 font-medium mb-6 line-clamp-2">{test.desc}</p>
+              <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mb-4">
+                Phiên bản: v{Number(test.versionCount || 0)}
+              </p>
               
               <div className="flex items-center justify-between pt-6 border-t border-gray-50">
                 <div className="flex items-center gap-2">
@@ -2399,79 +2575,179 @@ const ReportsView = ({
 }) => {
   const [studentReportType, setStudentReportType] = useState<'pie' | 'bar'>('pie');
   const [teacherReportType, setTeacherReportType] = useState<'pie' | 'bar'>('pie');
+  const [days, setDays] = useState(30);
+  const [schoolFilter, setSchoolFilter] = useState('');
+  const [classFilter, setClassFilter] = useState('');
+  const [refreshToken, setRefreshToken] = useState(0);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [reportData, setReportData] = useState<null | {
+    scope: string;
+    filters: { days: number; school: string; className: string; limit: number };
+    summary: { totalAttempts: number; uniqueUsers: number; avgScore: number; highRiskCount: number; highRiskRate: number };
+    byMonth: Array<{
+      month: string;
+      count: number;
+      avgScore: number;
+      highRiskCount: number;
+      studentCount: number;
+      teacherCount: number;
+      studentAvgScore: number;
+      teacherAvgScore: number;
+    }>;
+    byRole: Array<{ role: string; count: number; avgScore: number; highRiskCount: number }>;
+    byTemplate: Array<{ templateId: string; templateTitle: string; count: number; avgScore: number; highRiskCount: number }>;
+    byClass: Array<{ className: string; count: number; avgScore: number; highRiskCount: number }>;
+    recentRiskAlerts: Array<{
+      attemptId: string;
+      userId: string;
+      userName: string;
+      username: string;
+      role: string;
+      school: string;
+      className: string;
+      templateTitle: string;
+      scoreTotal: number;
+      scoreLevel: string;
+      submittedAt: string;
+    }>;
+    schoolOptions: string[];
+    classOptions: string[];
+    attempts: Array<{
+      attemptId: string;
+      userId: string;
+      userRole: string;
+      username: string;
+      userName: string;
+      school: string;
+      className: string;
+      templateId: string;
+      templateTitle: string;
+      scoreTotal: number;
+      scoreLevel: string;
+      suggestDass21: boolean;
+      submittedAt: string;
+      riskLevel: 'low' | 'medium' | 'high';
+      isHighRisk: boolean;
+    }>;
+  }>(null);
 
-  const teacherStressData = useMemo(() => {
-    return teachers.map(teacher => {
-      const results = testResults.filter(r => r.userId === teacher.id);
-      const avgScore = results.length > 0 
-        ? Math.round(results.reduce((acc, r) => acc + r.score, 0) / results.length)
-        : 0;
-      return {
-        name: teacher.name,
-        avgStress: avgScore
-      };
-    }).filter(t => t.avgStress > 0);
-  }, [teachers, testResults]);
+  useEffect(() => {
+    let isUnmounted = false;
 
-  const teacherPieData = useMemo(() => {
-    let low = 0, medium = 0, high = 0;
-    teacherStressData.forEach(t => {
-      if (t.avgStress > 60) high++;
-      else if (t.avgStress > 40) medium++;
-      else low++;
+    const loadReports = async () => {
+      setIsLoading(true);
+      setErrorMessage('');
+      const result = await testService.getReportsOverview({
+        days,
+        school: schoolFilter || undefined,
+        className: classFilter || undefined,
+      });
+
+      if (isUnmounted) return;
+
+      if (!result.ok) {
+        const message = 'error' in result
+          ? result.error.message
+          : 'Không thể tải báo cáo tổng hợp.';
+        setErrorMessage(message);
+        setReportData(null);
+      } else {
+        setReportData(result.data);
+      }
+
+      setIsLoading(false);
+    };
+
+    void loadReports();
+    return () => {
+      isUnmounted = true;
+    };
+  }, [days, schoolFilter, classFilter, refreshToken]);
+
+  const normalizeRole = (role: string) => {
+    const value = String(role || '').toLowerCase();
+    if (value.includes('student') || value.includes('học sinh') || value.includes('hoc sinh')) return 'student';
+    if (value.includes('teacher') || value.includes('giáo viên') || value.includes('giao vien')) return 'teacher';
+    if (value.includes('admin')) return 'admin';
+    return value || 'unknown';
+  };
+
+  const fallbackAttempts = useMemo(() => {
+    return (testResults || []).map((item) => ({
+      attemptId: item.id,
+      userId: item.userId,
+      userRole: normalizeRole(item.userRole || ''),
+      username: item.username || '',
+      userName: item.userName || '',
+      school: '',
+      className: item.userClass || '',
+      templateId: item.testId,
+      templateTitle: item.testTitle,
+      scoreTotal: Number(item.score || 0),
+      scoreLevel: item.scoreLevel || '',
+      suggestDass21: Boolean(item.suggestDass21),
+      submittedAt: new Date(item.timestamp || Date.now()).toISOString(),
+      riskLevel: Number(item.score || 0) >= 10 ? 'high' : (Number(item.score || 0) >= 5 ? 'medium' : 'low'),
+      isHighRisk: Number(item.score || 0) >= 10,
+    }));
+  }, [testResults]);
+
+  const attempts = reportData?.attempts && reportData.attempts.length > 0
+    ? reportData.attempts
+    : fallbackAttempts;
+
+  const studentAttempts = attempts.filter((item) => normalizeRole(item.userRole) === 'student');
+  const teacherAttempts = attempts.filter((item) => normalizeRole(item.userRole) === 'teacher');
+
+  const buildRiskPie = (items: typeof attempts, palette: [string, string, string]) => {
+    let low = 0;
+    let medium = 0;
+    let high = 0;
+    items.forEach((item) => {
+      if (item.riskLevel === 'high' || item.scoreTotal >= 10) high += 1;
+      else if (item.riskLevel === 'medium' || item.scoreTotal >= 5) medium += 1;
+      else low += 1;
     });
-    
-    // If no data, provide some mock data for visual purposes
-    if (low === 0 && medium === 0 && high === 0) {
-      return [
-        { name: 'Thấp (0-40)', value: 12, fill: '#18A5A7' },
-        { name: 'Trung bình (41-60)', value: 8, fill: '#F59E0B' },
-        { name: 'Cao (>60)', value: 3, fill: '#EF4444' },
-      ];
-    }
-
     return [
-      { name: 'Thấp (0-40)', value: low, fill: '#18A5A7' },
-      { name: 'Trung bình (41-60)', value: medium, fill: '#F59E0B' },
-      { name: 'Cao (>60)', value: high, fill: '#EF4444' },
-    ].filter(d => d.value > 0);
-  }, [teacherStressData]);
+      { name: 'Nguy cơ thấp', value: low, fill: palette[0] },
+      { name: 'Nguy cơ trung bình', value: medium, fill: palette[1] },
+      { name: 'Nguy cơ cao', value: high, fill: palette[2] },
+    ].filter((item) => item.value > 0);
+  };
 
-  const pieData = [
-    { name: 'Hoàn thành', value: 400, fill: '#18A5A7' },
-    { name: 'Chưa hoàn thành', value: 300, fill: '#F59E0B' },
-    { name: 'Đang thực hiện', value: 300, fill: '#EF4444' },
-  ];
+  const studentPieData = buildRiskPie(
+    studentAttempts.length > 0 ? studentAttempts : attempts,
+    ['#18A5A7', '#F59E0B', '#EF4444'],
+  );
+  const teacherPieData = buildRiskPie(
+    teacherAttempts.length > 0 ? teacherAttempts : attempts,
+    ['#18A5A7', '#F59E0B', '#EF4444'],
+  );
 
-  const barData = [
-    { name: 'Th1', value: 400 },
-    { name: 'Th2', value: 300 },
-    { name: 'Th3', value: 200 },
-    { name: 'Th4', value: 278 },
-    { name: 'Th5', value: 189 },
-    { name: 'Th6', value: 239 },
-    { name: 'Th7', value: 349 },
-    { name: 'Th8', value: 200 },
-    { name: 'Th9', value: 278 },
-    { name: 'Th10', value: 189 },
-    { name: 'Th11', value: 239 },
-    { name: 'Th12', value: 349 },
-  ];
+  const studentBarData = (reportData?.byMonth || []).map((item) => ({
+    name: item.month.slice(5, 7),
+    value: item.studentCount || item.count,
+  }));
 
-  const teacherBarData = [
-    { name: 'Th1', value: 45 },
-    { name: 'Th2', value: 52 },
-    { name: 'Th3', value: 38 },
-    { name: 'Th4', value: 65 },
-    { name: 'Th5', value: 48 },
-    { name: 'Th6', value: 35 },
-    { name: 'Th7', value: 28 },
-    { name: 'Th8', value: 42 },
-    { name: 'Th9', value: 55 },
-    { name: 'Th10', value: 60 },
-    { name: 'Th11', value: 45 },
-    { name: 'Th12', value: 50 },
-  ];
+  const teacherBarData = (reportData?.byMonth || []).map((item) => ({
+    name: item.month.slice(5, 7),
+    value: item.teacherAvgScore || item.avgScore,
+  }));
+
+  const topTemplates = (reportData?.byTemplate || []).slice(0, 5);
+  const topRiskClasses = (reportData?.byClass || []).slice(0, 6);
+  const riskAlerts = reportData?.recentRiskAlerts || [];
+
+  const summary = reportData?.summary || {
+    totalAttempts: attempts.length,
+    uniqueUsers: new Set(attempts.map((item) => item.userId)).size,
+    avgScore: attempts.length > 0 ? Number((attempts.reduce((acc, item) => acc + item.scoreTotal, 0) / attempts.length).toFixed(2)) : 0,
+    highRiskCount: attempts.filter((item) => item.isHighRisk).length,
+    highRiskRate: attempts.length > 0
+      ? Number(((attempts.filter((item) => item.isHighRisk).length / attempts.length) * 100).toFixed(2))
+      : 0,
+  };
 
   return (
     <ManagementLayout 
@@ -2482,12 +2758,88 @@ const ReportsView = ({
       setFilterSchoolId={setFilterSchoolId}
     >
       <div className="p-12 space-y-12">
+        <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm">
+          <div className="flex flex-wrap items-end gap-4">
+            <div>
+              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Khoảng thời gian</p>
+              <select
+                value={days}
+                onChange={(e) => setDays(Number(e.target.value))}
+                className="px-4 py-3 rounded-xl bg-gray-50 border-none outline-none font-bold text-sm text-gray-700"
+              >
+                <option value={30}>30 ngày</option>
+                <option value={90}>90 ngày</option>
+                <option value={180}>180 ngày</option>
+              </select>
+            </div>
+            {userData.role === 'Quản trị viên cấp cao' && (
+              <div>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Trường</p>
+                <select
+                  value={schoolFilter}
+                  onChange={(e) => setSchoolFilter(e.target.value)}
+                  className="px-4 py-3 rounded-xl bg-gray-50 border-none outline-none font-bold text-sm text-gray-700"
+                >
+                  <option value="">Tất cả trường</option>
+                  {(reportData?.schoolOptions || []).map((school) => (
+                    <option key={school} value={school}>{school}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div>
+              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Lớp</p>
+              <select
+                value={classFilter}
+                onChange={(e) => setClassFilter(e.target.value)}
+                className="px-4 py-3 rounded-xl bg-gray-50 border-none outline-none font-bold text-sm text-gray-700"
+              >
+                <option value="">Tất cả lớp</option>
+                {(reportData?.classOptions || []).map((className) => (
+                  <option key={className} value={className}>{className}</option>
+                ))}
+              </select>
+            </div>
+            <button
+              onClick={() => setRefreshToken((prev) => prev + 1)}
+              className="px-6 py-3 bg-brand-primary text-white rounded-xl text-xs font-black uppercase tracking-widest shadow-lg shadow-brand-primary/20"
+            >
+              Làm mới
+            </button>
+          </div>
+          {errorMessage && (
+            <p className="mt-4 text-sm font-bold text-red-500">{errorMessage}</p>
+          )}
+          {isLoading && (
+            <p className="mt-4 text-sm font-bold text-gray-500">Đang tải dữ liệu báo cáo...</p>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+          <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm">
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Tổng lượt làm bài</p>
+            <p className="text-3xl font-black text-brand-primary">{summary.totalAttempts}</p>
+          </div>
+          <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm">
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Người dùng tham gia</p>
+            <p className="text-3xl font-black text-brand-primary">{summary.uniqueUsers}</p>
+          </div>
+          <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm">
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Điểm trung bình</p>
+            <p className="text-3xl font-black text-brand-orange">{summary.avgScore}</p>
+          </div>
+          <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm">
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Tỷ lệ nguy cơ cao</p>
+            <p className="text-3xl font-black text-red-500">{summary.highRiskRate}%</p>
+          </div>
+        </div>
+
         <div>
           <div className="flex items-center justify-between mb-12">
             <div>
               <h2 className="text-4xl font-display font-black text-brand-primary">Báo cáo kết quả Học sinh</h2>
               <p className="text-gray-500">
-                {studentReportType === 'pie' ? 'Thống kê kết quả bài test trong tháng vừa qua.' : 'Thống kê kết quả bài test theo từng tháng trong năm.'}
+                {studentReportType === 'pie' ? 'Phân bố mức độ nguy cơ của học sinh trong khoảng lọc.' : 'Xu hướng số lượt làm bài của học sinh theo từng tháng.'}
               </p>
             </div>
             {studentReportType === 'pie' ? (
@@ -2513,7 +2865,7 @@ const ReportsView = ({
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
-                      data={pieData}
+                      data={studentPieData}
                       cx="50%"
                       cy="50%"
                       innerRadius={80}
@@ -2521,7 +2873,7 @@ const ReportsView = ({
                       paddingAngle={5}
                       dataKey="value"
                     >
-                      {pieData.map((entry, index) => (
+                      {studentPieData.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.fill} />
                       ))}
                     </Pie>
@@ -2531,7 +2883,7 @@ const ReportsView = ({
                   </PieChart>
                 </ResponsiveContainer>
                 <div className="flex justify-center gap-8 mt-8">
-                  {pieData.map((item, i) => (
+                  {studentPieData.map((item, i) => (
                     <div key={i} className="flex items-center gap-2">
                       <div className="w-3 h-3 rounded-full" style={{ backgroundColor: item.fill }}></div>
                       <span className="text-xs font-bold text-gray-500">{item.name}</span>
@@ -2542,7 +2894,7 @@ const ReportsView = ({
             ) : (
               <div className="w-full h-[400px]">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={barData}>
+                  <BarChart data={studentBarData}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
                     <XAxis 
                       dataKey="name" 
@@ -2573,7 +2925,7 @@ const ReportsView = ({
             <div>
               <h2 className="text-4xl font-display font-black text-brand-primary">Báo cáo mức độ Stress của Giáo viên</h2>
               <p className="text-gray-500">
-                {teacherReportType === 'pie' ? 'Thống kê mức độ stress hiện tại của đội ngũ giáo viên.' : 'Thống kê mức độ stress trung bình theo từng tháng trong năm.'}
+                {teacherReportType === 'pie' ? 'Phân bố mức độ nguy cơ của giáo viên trong khoảng lọc.' : 'Xu hướng điểm trung bình của giáo viên theo từng tháng.'}
               </p>
             </div>
             <div className="flex items-center gap-4">
@@ -2655,6 +3007,67 @@ const ReportsView = ({
                 </ResponsiveContainer>
               </div>
             )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm">
+            <h3 className="text-2xl font-black text-brand-primary mb-6">Top bài test theo lượt làm</h3>
+            <div className="space-y-4">
+              {topTemplates.length === 0 && (
+                <p className="text-sm text-gray-400 font-bold">Chưa có dữ liệu bài test trong khoảng thời gian đã chọn.</p>
+              )}
+              {topTemplates.map((item) => (
+                <div key={`${item.templateId}-${item.templateTitle}`} className="p-4 bg-gray-50 rounded-2xl">
+                  <p className="font-bold text-gray-700">{item.templateTitle}</p>
+                  <p className="text-xs text-gray-500 mt-1">Lượt làm: {item.count} | Điểm TB: {item.avgScore} | Nguy cơ cao: {item.highRiskCount}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm">
+            <h3 className="text-2xl font-black text-brand-primary mb-6">Lớp cần theo dõi</h3>
+            <div className="space-y-4">
+              {topRiskClasses.length === 0 && (
+                <p className="text-sm text-gray-400 font-bold">Chưa có lớp nào đủ dữ liệu để phân tích.</p>
+              )}
+              {topRiskClasses.map((item) => (
+                <div key={item.className} className="p-4 bg-gray-50 rounded-2xl flex items-center justify-between">
+                  <div>
+                    <p className="font-bold text-gray-700">Lớp {item.className}</p>
+                    <p className="text-xs text-gray-500 mt-1">Lượt làm: {item.count} | Điểm TB: {item.avgScore}</p>
+                  </div>
+                  <span className="px-3 py-1 rounded-full bg-red-50 text-red-500 text-[10px] font-black uppercase tracking-widest">
+                    Nguy cơ cao: {item.highRiskCount}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm">
+          <h3 className="text-2xl font-black text-brand-primary mb-6">Cảnh báo rủi ro gần nhất</h3>
+          <div className="space-y-4">
+            {riskAlerts.length === 0 && (
+              <p className="text-sm text-gray-400 font-bold">Không có cảnh báo rủi ro cao trong khoảng dữ liệu hiện tại.</p>
+            )}
+            {riskAlerts.map((alert) => (
+              <div key={alert.attemptId} className="p-5 rounded-2xl bg-red-50 border border-red-100">
+                <div className="flex flex-wrap items-center gap-3 justify-between">
+                  <p className="text-sm font-black text-red-600">@{alert.username} - {alert.templateTitle}</p>
+                  <span className="text-[10px] font-black uppercase tracking-widest text-red-500">
+                    {new Date(alert.submittedAt).toLocaleString('vi-VN')}
+                  </span>
+                </div>
+                <p className="text-sm text-gray-600 mt-2">
+                  Điểm: <b>{alert.scoreTotal}</b> | Mức: <b>{alert.scoreLevel || 'Nguy cơ cao'}</b>
+                  {alert.className ? ` | Lớp: ${alert.className}` : ''}
+                  {alert.school ? ` | Trường: ${alert.school}` : ''}
+                </p>
+              </div>
+            ))}
           </div>
         </div>
       </div>
@@ -3734,6 +4147,9 @@ const AdminView = ({
                       <div>
                         <p className="font-bold text-gray-800 text-sm">@{result.username}</p>
                         <p className="text-[10px] text-gray-400 font-medium">{result.testTitle}</p>
+                        {result.scoreLevel && (
+                          <p className="text-[10px] text-brand-primary font-bold mt-1">{result.scoreLevel}</p>
+                        )}
                       </div>
                     </div>
                     <div className="flex items-center gap-3">
@@ -4223,6 +4639,10 @@ export default function App() {
       questionList: []
     }
   ]);
+  const [isTestsLoading, setIsTestsLoading] = useState(false);
+  const [testsError, setTestsError] = useState('');
+  const [isResultsLoading, setIsResultsLoading] = useState(false);
+  const [resultsError, setResultsError] = useState('');
   const [pendingTeachers, setPendingTeachers] = useState<any[]>([
     { id: 'p1', name: 'Lê Văn Tám', school: 'THPT Lương Thế Vinh', username: 'tam_le', role: 'Giáo viên', timestamp: Date.now() - 3600000 },
     { id: 'p2', name: 'Hoàng Thị Yến', school: 'THPT Kim Liên', username: 'yen_hoang', role: 'Giáo viên', timestamp: Date.now() - 7200000 }
@@ -4232,15 +4652,40 @@ export default function App() {
   const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
   const [passwordChangeUser, setPasswordChangeUser] = useState<{ id: string, name: string } | null>(null);
 
-  const handleDeleteTest = (id: string) => {
+  const handleDeleteTest = async (id: string) => {
     const testToDelete = tests.find(t => t.id === id);
     if (testToDelete?.isPredefined && userData.role !== 'Quản trị viên cấp cao') {
       alert('Bạn không có quyền xóa bài test mặc định của hệ thống.');
       return;
     }
     if (window.confirm('Bạn có chắc chắn muốn xóa bài test này?')) {
-      setTests(tests.filter(t => t.id !== id));
+      const result = await testService.deleteTemplate(id);
+      if (!result.ok) {
+        const message = 'error' in result ? result.error.message : 'Không xóa được bài test.';
+        alert(message);
+        return;
+      }
+      setTests((prev) => prev.filter((t) => String(t.id) !== id));
     }
+  };
+
+  const handleToggleTest = async (id: string) => {
+    const item = tests.find((test) => String(test.id) === id);
+    if (!item) return;
+
+    const result = await testService.publishTemplate(id, !item.isOpen);
+    if (!result.ok) {
+      const message = 'error' in result ? result.error.message : 'Không cập nhật được trạng thái bài test.';
+      alert(message);
+      return;
+    }
+
+    const updated = result.data.template;
+    setTests((prev) => prev.map((test) => (
+      String(test.id) === id
+        ? { ...test, ...normalizeTestFromApiTemplate(updated, test) }
+        : test
+    )));
   };
 
   const handleEditTest = (test: any) => {
@@ -4252,7 +4697,7 @@ export default function App() {
       setActiveTest(test);
     } else {
       setActiveTest({
-        id: `t${Date.now()}`,
+        id: `tmp-${Date.now()}`,
         title: 'Bài test mới',
         desc: 'Mô tả bài test',
         time: '15 phút',
@@ -4260,6 +4705,8 @@ export default function App() {
         icon: 'Zap',
         color: 'bg-brand-primary',
         isOpen: true,
+        isPredefined: false,
+        isNewTemplate: true,
         targetAudience: 'Cả hai',
         questionList: []
       });
@@ -4267,10 +4714,102 @@ export default function App() {
     setCurrentView('test-editor');
   };
 
+  const openTestTakingView = async (test: any) => {
+    const templateId = String(test?.id || '').trim();
+    if (!templateId) return;
+
+    const detailResult = await testService.getTemplateDetail(templateId);
+    if (!detailResult.ok) {
+      const message = 'error' in detailResult
+        ? detailResult.error.message
+        : 'Không tải được nội dung bài test.';
+      alert(message);
+      return;
+    }
+
+    const normalized = normalizeTestFromApiTemplate(
+      detailResult.data.template,
+      {
+        ...test,
+        questionList: mapApiQuestionListToUi(detailResult.data.questionList),
+      },
+    );
+
+    setTests((prev) => prev.map((item) => (
+      String(item.id) === String(normalized.id)
+        ? { ...item, ...normalized }
+        : item
+    )));
+    setActiveTest(normalized);
+    setCurrentView('test-taking');
+  };
+
   const onDeleteAdmin = (id: string) => {
     if (window.confirm('Bạn có chắc chắn muốn xóa Admin này?')) {
       setAdmins(admins.filter(a => a.id !== id));
     }
+  };
+
+  const resolveSchoolIdByName = (schoolName: string) => {
+    const normalized = String(schoolName || '').trim().toLowerCase();
+    const found = schools.find((school) => String(school.name || '').trim().toLowerCase() === normalized);
+    if (found) return found.id;
+    return `school-${normalized.replace(/[^a-z0-9]+/g, '-')}`;
+  };
+
+  const onCreateAdmin = async () => {
+    const username = window.prompt('Tên đăng nhập admin mới (vd: admin_danang):', '')?.trim() || '';
+    if (!username) return;
+
+    const password = window.prompt('Mật khẩu tạm thời (>=6 ký tự):', '123456')?.trim() || '';
+    if (!password) return;
+
+    const name = window.prompt('Họ tên admin:', '')?.trim() || '';
+    if (!name) return;
+
+    const email = window.prompt('Email admin (dùng OTP đăng nhập):', '')?.trim() || '';
+    if (!email) return;
+
+    const school = window.prompt('Tên trường phụ trách:', '')?.trim() || '';
+    if (!school) return;
+
+    const createResult = await authService.createAdmin({
+      username,
+      password,
+      profile: {
+        name,
+        email,
+        school,
+      },
+    });
+
+    if (!createResult.ok) {
+      const message = 'error' in createResult ? createResult.error.message : 'Không tạo được admin.';
+      alert(message);
+      return;
+    }
+
+    const createdAdmin = createResult.data;
+    const schoolId = resolveSchoolIdByName(createdAdmin.profile.school || school);
+
+    setAdmins((prev) => {
+      const nextItem = {
+        id: createdAdmin.id,
+        name: createdAdmin.profile.name || createdAdmin.username,
+        username: createdAdmin.username,
+        school: createdAdmin.profile.school || school,
+        schoolId,
+        role: 'Admin',
+        email: createdAdmin.profile.email || email,
+      };
+      const exists = prev.some((item) => String(item.id) === String(createdAdmin.id));
+      if (exists) {
+        return prev.map((item) => (String(item.id) === String(createdAdmin.id) ? { ...item, ...nextItem } : item));
+      }
+      return [...prev, nextItem];
+    });
+
+    alert(`Đã tạo Admin @${createdAdmin.username}. Mật khẩu tạm: ${password}`);
   };
 
   const onDeleteTeacher = (id: string) => {
@@ -4402,6 +4941,117 @@ export default function App() {
       isUnmounted = true;
     };
   }, []);
+
+  useEffect(() => {
+    let isUnmounted = false;
+
+    const syncAdminList = async () => {
+      if (!isLoggedIn || userData.role !== 'Quản trị viên cấp cao') return;
+
+      const adminResult = await authService.listAdmins();
+      if (!adminResult.ok || isUnmounted) return;
+
+      const mapped = adminResult.data.map((account) => ({
+        id: account.id,
+        name: account.profile.name || account.username,
+        username: account.username,
+        school: account.profile.school || '',
+        schoolId: resolveSchoolIdByName(account.profile.school || ''),
+        role: 'Admin',
+        email: account.profile.email || '',
+      }));
+
+      setAdmins(mapped);
+    };
+
+    void syncAdminList();
+
+    return () => {
+      isUnmounted = true;
+    };
+  }, [isLoggedIn, userData.role, schools]);
+
+  useEffect(() => {
+    let isUnmounted = false;
+
+    const syncTestData = async () => {
+      if (!isLoggedIn) {
+        setIsTestsLoading(false);
+        setIsResultsLoading(false);
+        setTestsError('');
+        setResultsError('');
+        return;
+      }
+
+      setIsTestsLoading(true);
+      setTestsError('');
+      const shouldUseManageTemplates = userData.role === 'Admin' || userData.role === 'Quản trị viên cấp cao';
+      const catalogResult = shouldUseManageTemplates
+        ? await testService.listManageTemplates()
+        : await testService.listCatalog();
+      if (!isUnmounted) {
+        if (!catalogResult.ok) {
+          const message = 'error' in catalogResult
+            ? catalogResult.error.message
+            : 'Không tải được danh mục bài test.';
+          setTestsError(message);
+        } else {
+          setTests((prevTests) => {
+            const prevById = new Map(prevTests.map((item: any) => [String(item.id), item]));
+            const mergedFromApi = catalogResult.data.templates.map((template) => {
+              const existingTest = prevById.get(String(template.id));
+              return normalizeTestFromApiTemplate(template, existingTest);
+            });
+
+            const apiIds = new Set(mergedFromApi.map((item) => String(item.id)));
+            const localOnly = prevTests.filter((item: any) => !apiIds.has(String(item.id)));
+            return sortTestsKeepingCoreFirst([...mergedFromApi, ...localOnly]);
+          });
+        }
+        setIsTestsLoading(false);
+      }
+
+      setIsResultsLoading(true);
+      setResultsError('');
+      const myResults = await testService.listMyResults();
+      if (!isUnmounted) {
+        if (!myResults.ok) {
+          const message = 'error' in myResults
+            ? myResults.error.message
+            : 'Không tải được kết quả bài test.';
+          setResultsError(message);
+        } else {
+          const mappedResults: TestResult[] = myResults.data.results.map((item) => ({
+            id: item.id,
+            testId: item.templateId,
+            testTitle: item.templateTitle,
+            userId: userData.id,
+            userName: userData.name,
+            username: userData.username,
+            userRole: userData.role,
+            userClass: userData.className,
+            score: Number(item.scoreTotal || 0),
+            scoreLevel: item.scoreLevel || '',
+            scorePayload: item.scorePayload || {},
+            suggestDass21: Boolean(item.suggestDass21),
+            timestamp: new Date(item.submittedAt).getTime() || Date.now(),
+          }));
+
+          setTestResults((prev) => {
+            const withoutCurrentUser = prev.filter((result) => result.userId !== userData.id);
+            return [...mappedResults, ...withoutCurrentUser].sort((a, b) => b.timestamp - a.timestamp);
+          });
+        }
+        setIsResultsLoading(false);
+      }
+    };
+
+    void syncTestData();
+
+    return () => {
+      isUnmounted = true;
+    };
+  }, [isLoggedIn, userData.id, userData.name, userData.username, userData.role, userData.className]);
 
   const handleLogout = async () => {
     await authService.logout();
@@ -5087,9 +5737,11 @@ export default function App() {
               <TestListView 
                 tests={tests}
                 onEdit={handleEditTest}
-                onDelete={handleDeleteTest}
+                onDelete={(id) => {
+                  void handleDeleteTest(id);
+                }}
                 onToggle={(id) => {
-                  setTests(tests.map(t => t.id === id ? { ...t, isOpen: !t.isOpen } : t));
+                  void handleToggleTest(id);
                 }}
                 userData={userData}
                 setCurrentView={(view) => {
@@ -5111,11 +5763,10 @@ export default function App() {
             >
               <StudentTestsView 
                 tests={tests}
-                onTakeTest={(test) => {
-                  setActiveTest(test);
-                  setCurrentView('test-taking');
-                }}
+                onTakeTest={openTestTakingView}
                 userData={userData}
+                isLoadingTests={isTestsLoading || isResultsLoading}
+                testsError={testsError || resultsError}
                 setCurrentView={setCurrentView}
                 onLogout={handleLogout}
               />
@@ -5152,6 +5803,9 @@ export default function App() {
                 setFilterSchoolId={setFilterSchoolId}
                 onDeleteAdmin={onDeleteAdmin}
                 onChangePassword={handleChangePassword}
+                onCreateAdmin={() => {
+                  void onCreateAdmin();
+                }}
               />
             </motion.div>
           )}
@@ -5368,12 +6022,52 @@ export default function App() {
                 test={activeTest}
                 onBack={() => setCurrentView('test-list')}
                 onSave={(updatedTest) => {
-                  if (tests.find(t => t.id === updatedTest.id)) {
-                    setTests(tests.map(t => t.id === updatedTest.id ? updatedTest : t));
-                  } else {
-                    setTests([...tests, updatedTest]);
-                  }
-                  setCurrentView('test-list');
+                  void (async () => {
+                    const payload = {
+                      title: String(updatedTest.title || '').trim(),
+                      description: String(updatedTest.desc || '').trim(),
+                      targetAudience: mapLabelToApiAudience(String(updatedTest.targetAudience || 'Cả hai')),
+                    };
+
+                    const isNewTemplate = String(updatedTest.id || '').startsWith('tmp-') || updatedTest.isNewTemplate === true;
+                    const serviceResult = isNewTemplate
+                      ? await testService.createTemplate(payload)
+                      : await testService.updateTemplate(String(updatedTest.id), payload);
+
+                    if (!serviceResult.ok) {
+                      const message = 'error' in serviceResult
+                        ? serviceResult.error.message
+                        : 'Không lưu được bài test.';
+                      alert(message);
+                      return;
+                    }
+
+                    const normalized = normalizeTestFromApiTemplate(
+                      serviceResult.data.template,
+                      {
+                        ...updatedTest,
+                        questionList: updatedTest.questionList || [],
+                        icon: updatedTest.icon || 'Zap',
+                        color: updatedTest.color || 'bg-brand-primary',
+                        time: updatedTest.time || '15 phút',
+                        questions: updatedTest.questions || `${(updatedTest.questionList || []).length || 0} câu`,
+                        isPredefined: Boolean(serviceResult.data.template.isSystem),
+                      },
+                    );
+
+                    setTests((prev) => {
+                      const exists = prev.some((item) => String(item.id) === String(normalized.id));
+                      if (exists) {
+                        return prev.map((item) => (
+                          String(item.id) === String(normalized.id)
+                            ? { ...item, ...normalized }
+                            : item
+                        ));
+                      }
+                      return sortTestsKeepingCoreFirst([...prev.filter((item) => String(item.id) !== String(updatedTest.id)), normalized]);
+                    });
+                    setCurrentView('test-list');
+                  })();
                 }}
               />
             </motion.div>
@@ -5390,26 +6084,48 @@ export default function App() {
                 test={activeTest}
                 userData={userData}
                 onBack={() => setCurrentView('test-list')}
-                onComplete={(score) => {
+                onComplete={async ({ test, answers, score }) => {
+                  const submitResult = await testService.submitResult({
+                    templateId: String(test.id),
+                    answers,
+                    score,
+                  });
+
+                  if (!submitResult.ok) {
+                    const message = 'error' in submitResult
+                      ? submitResult.error.message
+                      : 'Không thể nộp bài test.';
+                    throw new Error(message);
+                  }
+
                   const newResult: TestResult = {
-                    id: `r${Date.now()}`,
-                    testId: activeTest.id,
+                    id: submitResult.data.attemptId || `r${Date.now()}`,
+                    testId: String(activeTest.id),
                     testTitle: activeTest.title,
                     userId: userData.id,
                     userName: userData.name,
                     username: userData.username,
                     userRole: userData.role,
                     userClass: userData.className,
-                    score: score,
-                    timestamp: Date.now()
+                    score: submitResult.data.scoreTotal,
+                    scoreLevel: submitResult.data.scoreLevel,
+                    scorePayload: submitResult.data.scorePayload,
+                    suggestDass21: submitResult.data.suggestDass21,
+                    timestamp: Date.now(),
                   };
-                  setTestResults([...testResults, newResult]);
+                  setTestResults((prev) => [newResult, ...prev]);
+
+                  return {
+                    scoreTotal: submitResult.data.scoreTotal,
+                    scoreLevel: submitResult.data.scoreLevel,
+                    suggestDass21: submitResult.data.suggestDass21,
+                  };
                 }}
                 onTakeDass21={() => {
-                  const dassTest = tests.find(t => t.title.toUpperCase().includes('DASS-21'));
+                  const dassTest = tests.find(t => String(t.id) === '5')
+                    || tests.find(t => t.title.toUpperCase().includes('DASS-21'));
                   if (dassTest) {
-                    setActiveTest(dassTest);
-                    setCurrentView('test-taking');
+                    void openTestTakingView(dassTest);
                   } else {
                     alert('Bài test DASS-21 chưa được tạo trên hệ thống.');
                   }

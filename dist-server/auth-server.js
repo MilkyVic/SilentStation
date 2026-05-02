@@ -1,7 +1,8 @@
 import 'dotenv/config';
 import express from 'express';
-import { AuthHttpError, createClassJoinCode, getCurrentUser, healthCheck, initializeAuthCore, issueRegisterOtp, listActiveClassJoinCodes, listClassJoinCodeEvents, loginAccount, logoutToken, registerAccount, revokeClassJoinCode, } from './auth-core.js';
+import { AuthHttpError, createAdminAccount, createClassJoinCode, getCurrentUser, healthCheck, initializeAuthCore, issueRegisterOtp, listAdminAccounts, listActiveClassJoinCodes, listClassJoinCodeEvents, loginAccount, logoutToken, registerAccount, revokeClassJoinCode, } from './auth-core.js';
 import { sendChatMessage } from './chat-core.js';
+import { createCustomTestTemplate, deleteCustomTestTemplate, getTestOpsSummary, getTestReportsOverview, listManageTestTemplates, listTemplateVersions, getTestTemplateDetail, initializeTestCore, listMyTestResults, publishTestTemplate, listTestCatalog, submitTestResult, updateCustomTestTemplate, } from './test-core.js';
 const app = express();
 app.use(express.json());
 const CORS_ORIGIN = process.env.AUTH_API_CORS_ORIGIN || '*';
@@ -21,7 +22,7 @@ app.use((req, res, next) => {
         res.setHeader('Access-Control-Allow-Origin', '*');
     }
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
     if (req.method === 'OPTIONS') {
         res.status(204).end();
         return;
@@ -55,6 +56,14 @@ app.post('/api/auth/logout', asyncHandler(async (req, res) => {
     await logoutToken(getBearerToken(req));
     res.status(200).json({ ok: true });
 }));
+app.get('/api/admins', asyncHandler(async (req, res) => {
+    const data = await listAdminAccounts(getBearerToken(req));
+    res.status(200).json({ ok: true, ...data });
+}));
+app.post('/api/admins', asyncHandler(async (req, res) => {
+    const data = await createAdminAccount(getBearerToken(req), req.body ?? {});
+    res.status(201).json({ ok: true, ...data });
+}));
 app.post('/api/class-codes/create', asyncHandler(async (req, res) => {
     const result = await createClassJoinCode(getBearerToken(req), req.body ?? {});
     res.status(201).json({ ok: true, code: result.code, data: result.data });
@@ -75,6 +84,59 @@ app.post('/api/chat/send', asyncHandler(async (req, res) => {
     const result = await sendChatMessage(req.body ?? {});
     res.status(200).json({ ok: true, ...result });
 }));
+app.get('/api/tests/catalog', asyncHandler(async (req, res) => {
+    const data = await listTestCatalog(getBearerToken(req));
+    res.status(200).json({ ok: true, ...data });
+}));
+app.post('/api/tests/submit', asyncHandler(async (req, res) => {
+    const data = await submitTestResult(getBearerToken(req), req.body ?? {});
+    res.status(201).json({ ok: true, ...data });
+}));
+app.get('/api/tests/results/me', asyncHandler(async (req, res) => {
+    const data = await listMyTestResults(getBearerToken(req));
+    res.status(200).json({ ok: true, ...data });
+}));
+app.get('/api/tests/reports/overview', asyncHandler(async (req, res) => {
+    const data = await getTestReportsOverview(getBearerToken(req), req.query ?? {});
+    res.status(200).json({ ok: true, ...data });
+}));
+app.get('/api/tests/ops/summary', asyncHandler(async (req, res) => {
+    const data = await getTestOpsSummary(getBearerToken(req), req.query ?? {});
+    res.status(200).json({ ok: true, ...data });
+}));
+app.get('/api/tests/templates/manage', asyncHandler(async (req, res) => {
+    const data = await listManageTestTemplates(getBearerToken(req));
+    res.status(200).json({ ok: true, ...data });
+}));
+app.get('/api/tests/templates/:id/versions', asyncHandler(async (req, res) => {
+    const templateId = String(req.params.id || '').trim();
+    const data = await listTemplateVersions(getBearerToken(req), templateId);
+    res.status(200).json({ ok: true, ...data });
+}));
+app.post('/api/tests/templates', asyncHandler(async (req, res) => {
+    const data = await createCustomTestTemplate(getBearerToken(req), req.body ?? {});
+    res.status(201).json({ ok: true, ...data });
+}));
+app.post('/api/tests/templates/:id/publish', asyncHandler(async (req, res) => {
+    const templateId = String(req.params.id || '').trim();
+    const data = await publishTestTemplate(getBearerToken(req), templateId, req.body ?? {});
+    res.status(200).json({ ok: true, ...data });
+}));
+app.patch('/api/tests/templates/:id', asyncHandler(async (req, res) => {
+    const templateId = String(req.params.id || '').trim();
+    const data = await updateCustomTestTemplate(getBearerToken(req), templateId, req.body ?? {});
+    res.status(200).json({ ok: true, ...data });
+}));
+app.delete('/api/tests/templates/:id', asyncHandler(async (req, res) => {
+    const templateId = String(req.params.id || '').trim();
+    const data = await deleteCustomTestTemplate(getBearerToken(req), templateId);
+    res.status(200).json({ ok: true, ...data });
+}));
+app.get('/api/tests/:templateId', asyncHandler(async (req, res) => {
+    const templateId = String(req.params.templateId || '').trim();
+    const data = await getTestTemplateDetail(getBearerToken(req), templateId);
+    res.status(200).json({ ok: true, ...data });
+}));
 app.use((error, _req, res, _next) => {
     if (error instanceof AuthHttpError) {
         const authError = error;
@@ -86,6 +148,7 @@ app.use((error, _req, res, _next) => {
 });
 const startServer = async () => {
     await initializeAuthCore();
+    await initializeTestCore();
     app.listen(PORT, () => {
         console.log(`[auth-api] running at http://localhost:${PORT}`);
     });

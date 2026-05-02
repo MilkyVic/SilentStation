@@ -176,6 +176,6 @@ Internal only:
 2. `teacher_test / 123456`
 3. `teacher_subject_test / 123456`
 4. `admin_test / 123456`
-5. `superadmin_test / 123456`
+5. `superadmin / 123456`
 
 Never show these credentials on UI or production docs.
