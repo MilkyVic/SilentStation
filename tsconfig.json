@@ -25,6 +25,7 @@
   },
   "exclude": [
     "tram-an-fe",
+    "trạm-an (1) (1)",
     "dist",
     "dist-server",
     "node_modules"

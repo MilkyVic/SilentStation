@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
-import { AuthHttpError, createAdminAccount, createClassJoinCode, getCurrentUser, healthCheck, initializeAuthCore, issueRegisterOtp, listAdminAccounts, listActiveClassJoinCodes, listClassJoinCodeEvents, loginAccount, logoutToken, registerAccount, revokeClassJoinCode, } from './auth-core.js';
+import { AuthHttpError, createAdminAccount, createClassJoinCode, getCurrentUser, healthCheck, initializeAuthCore, issueRegisterOtp, listAdminAccounts, approveTeacherAccount, listScopedUsers, listActiveClassJoinCodes, listClassJoinCodeEvents, loginAccount, logoutToken, registerAccount, revokeClassJoinCode, } from './auth-core.js';
 import { sendChatMessage } from './chat-core.js';
 import { createCustomTestTemplate, deleteCustomTestTemplate, getTestOpsSummary, getTestReportsOverview, listManageTestTemplates, listTemplateVersions, getTestTemplateDetail, initializeTestCore, listMyTestResults, publishTestTemplate, listTestCatalog, submitTestResult, updateCustomTestTemplate, } from './test-core.js';
 const app = express();
@@ -58,6 +58,14 @@ app.post('/api/auth/logout', asyncHandler(async (req, res) => {
 }));
 app.get('/api/admins', asyncHandler(async (req, res) => {
     const data = await listAdminAccounts(getBearerToken(req));
+    res.status(200).json({ ok: true, ...data });
+}));
+app.get('/api/users', asyncHandler(async (req, res) => {
+    const data = await listScopedUsers(getBearerToken(req), req.query ?? {});
+    res.status(200).json({ ok: true, ...data });
+}));
+app.post('/api/users/approve-teacher', asyncHandler(async (req, res) => {
+    const data = await approveTeacherAccount(getBearerToken(req), req.body ?? {});
     res.status(200).json({ ok: true, ...data });
 }));
 app.post('/api/admins', asyncHandler(async (req, res) => {

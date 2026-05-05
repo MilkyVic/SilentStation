@@ -1350,6 +1350,168 @@ export const listAdminAccounts = async (token) => {
         admins: result.rows.map((row) => toApiUser(mapUserRow(row))),
     };
 };
+const parseListScopedUsersQuery = (actor, query = {}) => {
+    const actorRole = actor.role;
+    if (actorRole !== 'superadmin' && actorRole !== 'admin') {
+        throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Khong co quyen xem danh sach nguoi dung.');
+    }
+    const allowedRoles = actorRole === 'superadmin'
+        ? ['student', 'teacher', 'admin']
+        : ['student', 'teacher'];
+    const requestedRole = typeof query?.role === 'string'
+        ? String(query.role).trim().toLowerCase()
+        : '';
+    if (requestedRole && !allowedRoles.includes(requestedRole)) {
+        throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Role duoc yeu cau khong hop le voi quyen hien tai.');
+    }
+    const roleFilter = requestedRole || null;
+    const schoolFilterFromQuery = typeof query?.school === 'string'
+        ? normalizeSchoolName(String(query.school).trim())
+        : '';
+    const schoolFilter = actorRole === 'admin'
+        ? normalizeSchoolName(actor.profile.school || '')
+        : schoolFilterFromQuery;
+    if (actorRole === 'admin' && !schoolFilter) {
+        throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Tai khoan Admin chua duoc gan truong.');
+    }
+    const classNameFilter = typeof query?.className === 'string'
+        ? String(query.className).trim()
+        : '';
+    const limitValue = Number(query?.limit ?? 120);
+    const limit = Number.isFinite(limitValue)
+        ? Math.min(Math.max(Math.floor(limitValue), 1), 200)
+        : 120;
+    return {
+        roleFilter,
+        schoolFilter,
+        classNameFilter,
+        limit,
+    };
+};
+export const listScopedUsers = async (token, query = {}) => {
+    await initializeAuthCore();
+    const actor = await getCurrentUser(token);
+    const parsed = parseListScopedUsersQuery(actor, query);
+    const clauses = [];
+    const params = [];
+    if (parsed.roleFilter) {
+        params.push(parsed.roleFilter);
+        clauses.push(`role = $${params.length}`);
+    }
+    else {
+        const defaultRoles = actor.role === 'superadmin'
+            ? ['student', 'teacher', 'admin']
+            : ['student', 'teacher'];
+        params.push(defaultRoles);
+        clauses.push(`role = ANY($${params.length})`);
+    }
+    if (parsed.schoolFilter) {
+        params.push(parsed.schoolFilter);
+        clauses.push(`profile_school = $${params.length}`);
+    }
+    if (parsed.classNameFilter) {
+        params.push(parsed.classNameFilter);
+        clauses.push(`profile_class_name = $${params.length}`);
+    }
+    params.push(parsed.limit);
+    const result = await getPool().query(`
+      SELECT
+        id,
+        username,
+        password_hash,
+        role,
+        status,
+        profile_name,
+        profile_email,
+        profile_birth_year,
+        profile_gender,
+        profile_school,
+        profile_class_name,
+        profile_phone,
+        profile_teacher_type,
+        profile_subject
+      FROM auth_users
+      WHERE ${clauses.join(' AND ')}
+      ORDER BY created_at DESC
+      LIMIT $${params.length}
+    `, params);
+    return {
+        users: result.rows.map((row) => toApiUser(mapUserRow(row))),
+    };
+};
+export const approveTeacherAccount = async (token, payload = {}) => {
+    await initializeAuthCore();
+    const actor = await getCurrentUser(token);
+    if (actor.role !== 'superadmin' && actor.role !== 'admin') {
+        throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Khong co quyen phe duyet giao vien.');
+    }
+    const teacherId = typeof payload?.teacherId === 'string'
+        ? String(payload.teacherId).trim()
+        : '';
+    if (!teacherId) {
+        throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Thieu teacherId can phe duyet.');
+    }
+    const teacherResult = await getPool().query(`
+      SELECT
+        id,
+        username,
+        password_hash,
+        role,
+        status,
+        profile_name,
+        profile_email,
+        profile_birth_year,
+        profile_gender,
+        profile_school,
+        profile_class_name,
+        profile_phone,
+        profile_teacher_type,
+        profile_subject
+      FROM auth_users
+      WHERE id = $1
+      LIMIT 1
+    `, [teacherId]);
+    if (teacherResult.rows.length === 0) {
+        throw new AuthHttpError(404, 'AUTH_SERVER_ERROR', 'Khong tim thay tai khoan giao vien.');
+    }
+    const teacher = mapUserRow(teacherResult.rows[0]);
+    if (teacher.role !== 'teacher') {
+        throw new AuthHttpError(400, 'AUTH_INVALID_ROLE', 'Tai khoan duoc chon khong phai giao vien.');
+    }
+    if (actor.role === 'admin') {
+        const actorSchool = normalizeSchoolName(actor.profile.school || '');
+        const teacherSchool = normalizeSchoolName(teacher.profile.school || '');
+        if (!actorSchool || actorSchool !== teacherSchool) {
+            throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Admin chi duoc phe duyet giao vien trong truong cua minh.');
+        }
+    }
+    if (teacher.status === 'active') {
+        return { teacher: toApiUser(teacher) };
+    }
+    const updatedResult = await getPool().query(`
+      UPDATE auth_users
+      SET status = 'active', updated_at = NOW()
+      WHERE id = $1
+      RETURNING
+        id,
+        username,
+        password_hash,
+        role,
+        status,
+        profile_name,
+        profile_email,
+        profile_birth_year,
+        profile_gender,
+        profile_school,
+        profile_class_name,
+        profile_phone,
+        profile_teacher_type,
+        profile_subject
+    `, [teacherId]);
+    return {
+        teacher: toApiUser(mapUserRow(updatedResult.rows[0])),
+    };
+};
 export const createAdminAccount = async (token, payload) => {
     await initializeAuthCore();
     const actor = await getCurrentUser(token);

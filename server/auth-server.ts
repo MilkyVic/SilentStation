@@ -9,6 +9,8 @@ import {
   initializeAuthCore,
   issueRegisterOtp,
   listAdminAccounts,
+  approveTeacherAccount,
+  listScopedUsers,
   listActiveClassJoinCodes,
   listClassJoinCodeEvents,
   loginAccount,
@@ -107,6 +109,16 @@ app.post('/api/auth/logout', asyncHandler(async (req, res) => {
 
 app.get('/api/admins', asyncHandler(async (req, res) => {
   const data = await listAdminAccounts(getBearerToken(req));
+  res.status(200).json({ ok: true, ...data });
+}));
+
+app.get('/api/users', asyncHandler(async (req, res) => {
+  const data = await listScopedUsers(getBearerToken(req), req.query ?? {});
+  res.status(200).json({ ok: true, ...data });
+}));
+
+app.post('/api/users/approve-teacher', asyncHandler(async (req, res) => {
+  const data = await approveTeacherAccount(getBearerToken(req), req.body ?? {});
   res.status(200).json({ ok: true, ...data });
 }));
 

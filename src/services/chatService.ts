@@ -5,6 +5,7 @@ type ChatSendResult = {
   data: {
     reply: string;
     sources: string[];
+    handbookSectionIds: string[];
     usedFallback: boolean;
   };
 } | {
@@ -83,6 +84,7 @@ export const chatService = {
         data: {
           reply: parsed.reply,
           sources: parsed.sources || [],
+          handbookSectionIds: Array.isArray(parsed.handbookSectionIds) ? parsed.handbookSectionIds : [],
           usedFallback: parsed.usedFallback,
         },
       };

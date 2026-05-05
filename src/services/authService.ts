@@ -12,6 +12,7 @@
   AuthApiSuccessResponse,
   AuthApiUser,
   AuthApiLoginOtpChallengeResponse,
+  AuthApiUsersListResponse,
   AuthApiRegisterOtpResponse,
   AuthErrorCode,
   AuthResult,
@@ -114,6 +115,7 @@ const AUTH_TOKEN_KEY = 'tram_an_auth_token';
 const AUTH_API_PREFIX = '/api/auth';
 const CLASS_CODE_API_PREFIX = '/api/class-codes';
 const ADMIN_API_PREFIX = '/api/admins';
+const USERS_API_PREFIX = '/api/users';
 
 const TEST_AUTH_ACCOUNTS: AuthAccount[] = [
   {
@@ -493,6 +495,7 @@ const callAuthApi = async (
 
 const buildClassCodeApiUrl = (path: string) => `${getAuthApiBaseUrl()}${CLASS_CODE_API_PREFIX}${path}`;
 const buildAdminApiUrl = (path: string) => `${getAuthApiBaseUrl()}${ADMIN_API_PREFIX}${path}`;
+const buildUsersApiUrl = (path: string) => `${getAuthApiBaseUrl()}${USERS_API_PREFIX}${path}`;
 
 const callClassCodeApi = async (path: string, init?: RequestInit): Promise<unknown | null> => {
   return callApi(buildClassCodeApiUrl(path), init);
@@ -500,6 +503,10 @@ const callClassCodeApi = async (path: string, init?: RequestInit): Promise<unkno
 
 const callAdminApi = async (path: string, init?: RequestInit): Promise<unknown | null> => {
   return callApi(buildAdminApiUrl(path), init);
+};
+
+const callUsersApi = async (path: string, init?: RequestInit): Promise<unknown | null> => {
+  return callApi(buildUsersApiUrl(path), init);
 };
 const localRegisterStudent = (payload: RegisterPayload): AuthResult => {
   if (findAccount(payload.username)) {
@@ -968,6 +975,118 @@ export const authService = {
 
     admins.forEach(upsertLocalAccount);
     return { ok: true, data: admins };
+  },
+
+  async listUsers(query: {
+    role?: 'student' | 'teacher' | 'admin';
+    school?: string;
+    className?: string;
+    limit?: number;
+  } = {}): Promise<ServiceResult<AuthAccount[]>> {
+    const token = getStoredToken();
+    if (!token) {
+      return makeError('AUTH_INVALID_CREDENTIALS', 'Phiên đăng nhập không hợp lệ.') as ServiceResult<AuthAccount[]>;
+    }
+
+    const params = new URLSearchParams();
+    if (query.role) params.set('role', query.role);
+    if (query.school) params.set('school', query.school);
+    if (query.className) params.set('className', query.className);
+    if (typeof query.limit === 'number') params.set('limit', String(query.limit));
+
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    const payload = await callUsersApi(suffix, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!payload || typeof payload !== 'object') {
+      return makeError('AUTH_SERVER_ERROR', 'Không kết nối được máy chủ danh sách người dùng.') as ServiceResult<AuthAccount[]>;
+    }
+
+    const result = payload as AuthApiUsersListResponse | AuthApiErrorResponse;
+    if (!('ok' in result) || result.ok !== true) {
+      const apiError = ('error' in result && result.error)
+        ? result.error
+        : null;
+      return {
+        ok: false,
+        error: {
+          code: apiError?.code || 'AUTH_SERVER_ERROR',
+          message: apiError?.message || 'Không tải được danh sách người dùng.',
+        },
+      };
+    }
+
+    const users = Array.isArray(result.users)
+      ? result.users.map((item) => mapApiUserToAccount(item))
+      : [];
+
+    users.forEach(upsertLocalAccount);
+    return { ok: true, data: users };
+  },
+
+  async approveTeacherAccountById(teacherId: string): Promise<ServiceResult<AuthAccount>> {
+    const normalizedTeacherId = String(teacherId || '').trim();
+    if (!normalizedTeacherId) {
+      return makeError('AUTH_SERVER_ERROR', 'Thiếu mã giáo viên cần phê duyệt.') as ServiceResult<AuthAccount>;
+    }
+
+    const token = getStoredToken();
+    if (!token) {
+      return makeError('AUTH_INVALID_CREDENTIALS', 'Phiên đăng nhập không hợp lệ.') as ServiceResult<AuthAccount>;
+    }
+
+    const payload = await callUsersApi('/approve-teacher', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ teacherId: normalizedTeacherId }),
+    });
+
+    if (payload && typeof payload === 'object') {
+      const result = payload as {
+        ok?: boolean;
+        error?: { code?: AuthErrorCode; message?: string };
+        teacher?: AuthApiUser;
+      };
+
+      if (!result.ok || !result.teacher) {
+        return {
+          ok: false,
+          error: {
+            code: result.error?.code || 'AUTH_SERVER_ERROR',
+            message: result.error?.message || 'Không phê duyệt được giáo viên.',
+          },
+        };
+      }
+
+      const account = mapApiUserToAccount(result.teacher);
+      upsertLocalAccount(account);
+      return { ok: true, data: account };
+    }
+
+    if (!shouldUseLocalFallback()) {
+      return makeError('AUTH_SERVER_ERROR', 'Không kết nối được máy chủ phê duyệt giáo viên.') as ServiceResult<AuthAccount>;
+    }
+
+    const localTeacher = accounts.find(
+      (account) => account.id === normalizedTeacherId && account.role === 'Giáo viên',
+    );
+
+    if (!localTeacher) {
+      return makeError('AUTH_SERVER_ERROR', 'Không tìm thấy giáo viên cần phê duyệt.') as ServiceResult<AuthAccount>;
+    }
+
+    const approved = authService.approveTeacherAccount(localTeacher.username);
+    if (!approved) {
+      return makeError('AUTH_SERVER_ERROR', 'Không phê duyệt được giáo viên.') as ServiceResult<AuthAccount>;
+    }
+
+    return { ok: true, data: approved };
   },
 
   async createAdmin(payload: {

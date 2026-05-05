@@ -37,10 +37,18 @@ import {
   MessageSquare,
   Eye,
   AlertCircle,
-  ChevronDown
+  ChevronDown,
+  Activity,
+  Map as MapIcon,
+  Cloud,
+  Package,
+  Check,
+  CloudRain,
+  Mic,
+  PhoneCall,
+  HelpCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import Markdown from 'react-markdown';
 import { HANDBOOK_DATA } from './data';
 import { cn } from './lib/utils';
 import { 
@@ -58,6 +66,7 @@ import {
 import { authService } from './services/authService';
 import { chatService } from './services/chatService';
 import { testService } from './services/testService';
+import HandbookView from './components/handbook/HandbookView';
 import type { AuthAccount, AuthRole } from './types/auth';
 import type { ChatUiMessage } from './types/chat';
 import AuthView from './components/auth/AuthView';
@@ -125,6 +134,18 @@ const IconMap: Record<string, React.ReactNode> = {
   Info: <Info size={18} />,
   School: <School size={18} />,
   Sparkles: <Sparkles size={18} />,
+  Map: <MapIcon size={18} />,
+  Cloud: <Cloud size={18} />,
+  Package: <Package size={18} />,
+  Activity: <Activity size={18} />,
+  Check: <Check size={18} />,
+  CloudRain: <CloudRain size={18} />,
+  Mic: <Mic size={18} />,
+  PhoneCall: <PhoneCall size={18} />,
+  HelpCircle: <HelpCircle size={18} />,
+  MessageSquare: <MessageSquare size={18} />,
+  Users: <Users size={18} />,
+  Lock: <Lock size={18} />,
 };
 
 type View = 'home' | 'handbook' | 'test-list' | 'contact' | 'auth' | 'admin' | 'superadmin' | 'test-editor' | 'test-taking' | 'account' | 'settings' | 'admin-list' | 'school-list' | 'class-list' | 'teacher-list' | 'reports' | 'teacher-class';
@@ -144,6 +165,7 @@ type TestResult = {
   username: string;
   userRole: string;
   userClass?: string;
+  userSchool?: string;
   score: number;
   scoreLevel?: string;
   scorePayload?: Record<string, unknown>;
@@ -151,12 +173,18 @@ type TestResult = {
   timestamp: number;
 };
 
-const createChatMessage = (role: 'user' | 'assistant', text: string, sources: string[] = []): ChatUiMessage => ({
+const createChatMessage = (
+  role: 'user' | 'assistant',
+  text: string,
+  sources: string[] = [],
+  handbookSectionIds: string[] = [],
+): ChatUiMessage => ({
   id: `chat-${role}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
   role,
   text,
   createdAt: Date.now(),
   ...(sources.length ? { sources } : {}),
+  ...(handbookSectionIds.length ? { handbookSectionIds } : {}),
 });
 
 const CORE_TEST_IDS = ['1', '2', '3', '4', '5'];
@@ -176,6 +204,110 @@ const sortTestsKeepingCoreFirst = <T extends { id?: string | number }>(items: T[
     })
     .map((item) => item.test)
 );
+
+const CHAT_SOURCE_LABELS: Record<string, string> = {
+  'knowledge-base': 'Kiến thức Trạm An',
+  'scope-guard': 'Điều hướng phạm vi',
+  'red-code-protocol': 'Quy trình an toàn khẩn cấp',
+};
+
+const HANDBOOK_INTENT_RULES: Array<{ id: string; keywords: string[]; score: number }> = [
+  {
+    id: 'nhan-dien-may-den',
+    score: 4,
+    keywords: [
+      'ap luc',
+      'stress',
+      'fomo',
+      'lo au',
+      'hoang loan',
+      'tram cam',
+      'cyberbullying',
+      'bat nat',
+    ],
+  },
+  {
+    id: 'bi-kip-f5',
+    score: 4,
+    keywords: [
+      'pomodoro',
+      '4 7 8',
+      'grounding',
+      '5 4 3 2 1',
+      'tipp',
+      'tho sau',
+      '3c',
+      'catch check change',
+      'f5',
+    ],
+  },
+  {
+    id: 'len-tieng-khi-can',
+    score: 3,
+    keywords: ['len tieng', 'tim nguoi lon', 'tham van', 'xin ho tro', 'bao co giao', 'bao thay co'],
+  },
+  {
+    id: 'danh-ba-lien-he',
+    score: 5,
+    keywords: ['111', '115', '1900 1267', '096 306 1414', 'hotline', 'khan cap'],
+  },
+  {
+    id: 'goc-go-roi',
+    score: 2,
+    keywords: ['hoi dap', 'q a', 'giai dap', 'go roi'],
+  },
+];
+
+const normalizeIntentText = (value: string) => (
+  String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+);
+
+const suggestHandbookSectionIds = (
+  assistantText: string,
+  userText: string,
+  sources: string[] = [],
+): string[] => {
+  const mergedText = normalizeIntentText(`${assistantText} ${userText}`);
+  const scoreMap = new Map<string, number>();
+
+  HANDBOOK_INTENT_RULES.forEach((rule) => {
+    const matchedCount = rule.keywords.reduce((count, keyword) => {
+      const normalizedKeyword = normalizeIntentText(keyword);
+      return normalizedKeyword && mergedText.includes(normalizedKeyword) ? count + 1 : count;
+    }, 0);
+    if (matchedCount > 0) {
+      scoreMap.set(rule.id, (scoreMap.get(rule.id) || 0) + matchedCount * rule.score);
+    }
+  });
+
+  if (sources.includes('red-code-protocol')) {
+    scoreMap.set('danh-ba-lien-he', (scoreMap.get('danh-ba-lien-he') || 0) + 20);
+    scoreMap.set('len-tieng-khi-can', (scoreMap.get('len-tieng-khi-can') || 0) + 12);
+  }
+
+  if (sources.includes('knowledge-base') && scoreMap.size === 0) {
+    scoreMap.set('goc-go-roi', 1);
+  }
+
+  return Array.from(scoreMap.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([id]) => id)
+    .filter((id) => HANDBOOK_DATA.some((section) => section.id === id))
+    .slice(0, 2);
+};
+
+const getHandbookSectionTitle = (sectionId: string) => {
+  const section = HANDBOOK_DATA.find((item) => item.id === sectionId);
+  return section?.title || sectionId;
+};
+
+const toDisplaySourceLabel = (source: string) => CHAT_SOURCE_LABELS[source] || source;
 
 const mapApiAudienceToLabel = (audience: string) => {
   if (audience === 'student') return 'Học sinh';
@@ -3266,6 +3398,7 @@ const SuperAdminView = ({
   schools,
   teachers,
   classes,
+  students,
   onViewSchool,
   onViewAdmin,
   userData,
@@ -3277,12 +3410,23 @@ const SuperAdminView = ({
   schools: any[],
   teachers: any[],
   classes: any[],
+  students: any[],
   onViewSchool: (school: any) => void,
   onViewAdmin: (admin: any) => void,
   userData: any,
   onLogout: () => void,
   setFilterSchoolId: (id: string | null) => void
 }) => {
+  const studentCountBySchool = useMemo(() => {
+    const counts = new Map<string, number>();
+    students.forEach((student) => {
+      const school = String(student.school || '').trim();
+      if (!school) return;
+      counts.set(school, (counts.get(school) || 0) + 1);
+    });
+    return counts;
+  }, [students]);
+
   return (
     <ManagementLayout 
       userData={userData} 
@@ -3313,7 +3457,7 @@ const SuperAdminView = ({
         {/* Stats Grid */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-12">
           {[
-            { label: 'Học sinh', value: '5,909', icon: <GraduationCap />, color: "bg-brand-primary/10", textColor: "text-brand-primary", view: 'class-list' },
+            { label: 'Học sinh', value: students.length, icon: <GraduationCap />, color: "bg-brand-primary/10", textColor: "text-brand-primary", view: 'class-list' },
             { label: 'Giáo viên', value: teachers.length, icon: <Users />, color: "bg-brand-orange/10", textColor: "text-brand-orange", view: 'teacher-list' },
             { label: 'Trường học', value: schools.length, icon: <School />, color: "bg-brand-secondary/10", textColor: "text-brand-secondary", view: 'school-list' },
             { label: 'Admins', value: admins.length, icon: <User />, color: "bg-red-50", textColor: "text-red-500", view: 'admin-list' },
@@ -3353,7 +3497,11 @@ const SuperAdminView = ({
               </div>
               <div className="h-[300px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={schools.map(s => ({ name: s.name.split(' ').pop(), students: s.teacherCount * 10, teachers: s.teacherCount }))}>
+                  <BarChart data={schools.map((school) => ({
+                    name: school.name.split(' ').pop(),
+                    students: studentCountBySchool.get(school.name) || 0,
+                    teachers: Number(school.teacherCount || 0),
+                  }))}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
                     <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 10, fontWeight: 700 }} />
                     <YAxis axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 10, fontWeight: 700 }} />
@@ -4478,7 +4626,12 @@ export default function App() {
 
     setChatMessages((prev) => [
       ...prev,
-      createChatMessage('assistant', result.data.reply, result.data.sources),
+      createChatMessage(
+        'assistant',
+        result.data.reply,
+        result.data.sources,
+        result.data.handbookSectionIds,
+      ),
     ]);
     setIsChatSending(false);
   };
@@ -4493,13 +4646,7 @@ export default function App() {
   const [teachers, setTeachers] = useState(MOCK_TEACHERS);
   const [admins, setAdmins] = useState(MOCK_ADMINS);
   const [schools, setSchools] = useState(MOCK_SCHOOLS);
-  const [classes, setClasses] = useState([
-    { id: 'c1', name: '12A1', studentCount: 45, avgStress: 52, teacherName: 'Nguyễn Thị Minh' },
-    { id: 'c2', name: '12A2', studentCount: 42, avgStress: 68, teacherName: 'Trần Văn Hùng' },
-    { id: 'c3', name: '11B1', studentCount: 48, avgStress: 45, teacherName: 'Lê Thị Mai' },
-    { id: 'c4', name: '10C1', studentCount: 50, avgStress: 38, teacherName: 'Nguyễn Thị Minh' },
-    { id: 'c5', name: '12D1', studentCount: 40, avgStress: 55, teacherName: 'Trần Văn Hùng' },
-  ]);
+  const [classes, setClasses] = useState(MOCK_CLASSES);
   const [students, setStudents] = useState(MOCK_STUDENTS);
   const [testResults, setTestResults] = useState<TestResult[]>([]);
   const [activeTest, setActiveTest] = useState<any>(null);
@@ -4643,10 +4790,8 @@ export default function App() {
   const [testsError, setTestsError] = useState('');
   const [isResultsLoading, setIsResultsLoading] = useState(false);
   const [resultsError, setResultsError] = useState('');
-  const [pendingTeachers, setPendingTeachers] = useState<any[]>([
-    { id: 'p1', name: 'Lê Văn Tám', school: 'THPT Lương Thế Vinh', username: 'tam_le', role: 'Giáo viên', timestamp: Date.now() - 3600000 },
-    { id: 'p2', name: 'Hoàng Thị Yến', school: 'THPT Kim Liên', username: 'yen_hoang', role: 'Giáo viên', timestamp: Date.now() - 7200000 }
-  ]);
+  const [pendingTeachers, setPendingTeachers] = useState<any[]>([]);
+  const [managedUsersReloadToken, setManagedUsersReloadToken] = useState(0);
   const [selectedCenter, setSelectedCenter] = useState<number | null>(null);
   const [teacherRegCode, setTeacherRegCode] = useState<{ code: string, expiry: number, className?: string } | null>(null);
   const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
@@ -4750,11 +4895,237 @@ export default function App() {
     }
   };
 
+  const normalizeSchoolKey = (value: string) => String(value || '').trim().toLowerCase();
+
+  const buildSchoolId = (schoolName: string) => {
+    const normalized = normalizeSchoolKey(schoolName);
+    return `school-${normalized.replace(/[^a-z0-9]+/g, '-') || 'unknown'}`;
+  };
+
   const resolveSchoolIdByName = (schoolName: string) => {
-    const normalized = String(schoolName || '').trim().toLowerCase();
-    const found = schools.find((school) => String(school.name || '').trim().toLowerCase() === normalized);
+    const normalized = normalizeSchoolKey(schoolName);
+    const found = schools.find((school) => normalizeSchoolKey(String(school.name || '')) === normalized);
     if (found) return found.id;
-    return `school-${normalized.replace(/[^a-z0-9]+/g, '-')}`;
+    return buildSchoolId(normalized);
+  };
+
+  const mapAccountToTeacherRow = (account: AuthAccount) => {
+    const school = account.profile.school || '';
+    const className = account.profile.className || '';
+    const teacherType = account.profile.teacherType || (className ? 'homeroom' : 'subject');
+
+    return {
+      id: account.id,
+      name: account.profile.name || account.username,
+      fullName: account.profile.name || account.username,
+      username: account.username,
+      email: account.profile.email || `${account.username}@tram-an.vn`,
+      phoneNumber: account.profile.phone || '',
+      birthYear: account.profile.birthYear || '',
+      school,
+      schoolId: resolveSchoolIdByName(school),
+      role: 'Giáo viên',
+      className,
+      teacherType,
+      subject: account.profile.subject || '',
+      status: account.status,
+    };
+  };
+
+  const mapAccountToStudentRow = (account: AuthAccount) => {
+    const school = account.profile.school || '';
+    const className = account.profile.className || '';
+    const score = 0;
+
+    return {
+      id: account.id,
+      name: account.profile.name || account.username,
+      username: account.username,
+      gender: account.profile.gender || '',
+      stressLevel: score,
+      testsCompleted: 0,
+      className,
+      schoolId: resolveSchoolIdByName(school),
+      school,
+      phone: account.profile.phone || '',
+      dob: account.profile.birthYear ? `${account.profile.birthYear}-01-01` : '',
+      accomType: '-',
+      transport: '-',
+      location: school || '-',
+      rank: '-',
+      points: score,
+      status: account.status,
+    };
+  };
+
+  const buildClassesFromUsers = (teacherRows: any[], studentRows: any[]) => {
+    const classMap = new Map<string, {
+      id: string;
+      name: string;
+      studentCount: number;
+      avgStress: number;
+      teacherName: string;
+      schoolId: string;
+      scoreTotal: number;
+      scoreCount: number;
+    }>();
+
+    teacherRows.forEach((teacher) => {
+      const className = String(teacher.className || '').trim();
+      if (!className) return;
+
+      const schoolId = String(teacher.schoolId || '');
+      const key = `${schoolId}::${className}`;
+      if (!classMap.has(key)) {
+        classMap.set(key, {
+          id: `class-${key.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+          name: className,
+          studentCount: 0,
+          avgStress: 0,
+          teacherName: teacher.name || teacher.username || 'Chưa gán',
+          schoolId,
+          scoreTotal: 0,
+          scoreCount: 0,
+        });
+        return;
+      }
+
+      const current = classMap.get(key);
+      if (current && !current.teacherName && (teacher.name || teacher.username)) {
+        current.teacherName = teacher.name || teacher.username;
+      }
+    });
+
+    studentRows.forEach((student) => {
+      const className = String(student.className || '').trim();
+      if (!className) return;
+
+      const schoolId = String(student.schoolId || '');
+      const key = `${schoolId}::${className}`;
+      if (!classMap.has(key)) {
+        classMap.set(key, {
+          id: `class-${key.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+          name: className,
+          studentCount: 0,
+          avgStress: 0,
+          teacherName: 'Chưa gán',
+          schoolId,
+          scoreTotal: 0,
+          scoreCount: 0,
+        });
+      }
+
+      const current = classMap.get(key);
+      if (!current) return;
+
+      current.studentCount += 1;
+      const score = Number(student.points || student.stressLevel || 0);
+      if (Number.isFinite(score)) {
+        current.scoreTotal += score;
+        current.scoreCount += 1;
+      }
+    });
+
+    return Array.from(classMap.values()).map((item) => ({
+      id: item.id,
+      name: item.name,
+      studentCount: item.studentCount,
+      avgStress: item.scoreCount > 0 ? Math.round(item.scoreTotal / item.scoreCount) : 0,
+      teacherName: item.teacherName || 'Chưa gán',
+      schoolId: item.schoolId,
+    }));
+  };
+
+  const mergeSchoolsByName = (schoolNames: string[]) => {
+    if (!schoolNames.length) return;
+
+    setSchools((prev) => {
+      const byKey = new Map(prev.map((item) => [normalizeSchoolKey(String(item.name || '')), item]));
+      schoolNames
+        .map((name) => String(name || '').trim())
+        .filter((name) => name.length > 0)
+        .forEach((name) => {
+          const key = normalizeSchoolKey(name);
+          if (byKey.has(key)) return;
+          byKey.set(key, {
+            id: buildSchoolId(name),
+            name,
+            address: '',
+            teacherCount: 0,
+            classCount: 0,
+            adminId: '',
+          });
+        });
+      return Array.from(byKey.values());
+    });
+  };
+
+  const syncSchoolMetrics = (
+    teacherRows: any[],
+    studentRows: any[],
+    classRows: any[],
+  ) => {
+    setSchools((prev) => {
+      const byKey = new Map(prev.map((item) => [normalizeSchoolKey(String(item.name || '')), item]));
+      const teacherCountBySchool = new Map<string, number>();
+      const classCountBySchool = new Map<string, number>();
+
+      teacherRows
+        .map((item) => String(item.school || '').trim())
+        .filter((name) => name.length > 0)
+        .forEach((name) => {
+          const key = normalizeSchoolKey(name);
+          teacherCountBySchool.set(key, (teacherCountBySchool.get(key) || 0) + 1);
+          if (!byKey.has(key)) {
+            byKey.set(key, {
+              id: buildSchoolId(name),
+              name,
+              address: '',
+              teacherCount: 0,
+              classCount: 0,
+              adminId: '',
+            });
+          }
+        });
+
+      classRows
+        .map((item) => {
+          const schoolName = String(item.school || '').trim();
+          if (schoolName) return schoolName;
+          const schoolId = String(item.schoolId || '').trim();
+          if (!schoolId) return '';
+          const school = Array.from(byKey.values()).find((candidate) => String(candidate.id) === schoolId);
+          return school ? String(school.name || '').trim() : '';
+        })
+        .filter((name) => name.length > 0)
+        .forEach((name) => {
+          const key = normalizeSchoolKey(name);
+          classCountBySchool.set(key, (classCountBySchool.get(key) || 0) + 1);
+        });
+
+      studentRows
+        .map((item) => String(item.school || '').trim())
+        .filter((name) => name.length > 0)
+        .forEach((name) => {
+          const key = normalizeSchoolKey(name);
+          if (!byKey.has(key)) {
+            byKey.set(key, {
+              id: buildSchoolId(name),
+              name,
+              address: '',
+              teacherCount: 0,
+              classCount: 0,
+              adminId: '',
+            });
+          }
+        });
+
+      return Array.from(byKey.entries()).map(([key, item]) => ({
+        ...item,
+        teacherCount: teacherCountBySchool.get(key) || 0,
+        classCount: classCountBySchool.get(key) || 0,
+      }));
+    });
   };
 
   const onCreateAdmin = async () => {
@@ -4808,6 +5179,7 @@ export default function App() {
       }
       return [...prev, nextItem];
     });
+    mergeSchoolsByName([createdAdmin.profile.school || school]);
 
     alert(`Đã tạo Admin @${createdAdmin.username}. Mật khẩu tạm: ${password}`);
   };
@@ -4962,6 +5334,7 @@ export default function App() {
       }));
 
       setAdmins(mapped);
+      mergeSchoolsByName(mapped.map((item) => item.school));
     };
 
     void syncAdminList();
@@ -4969,7 +5342,75 @@ export default function App() {
     return () => {
       isUnmounted = true;
     };
-  }, [isLoggedIn, userData.role, schools]);
+  }, [isLoggedIn, userData.role]);
+
+  useEffect(() => {
+    let isUnmounted = false;
+
+    const syncManagedUsers = async () => {
+      if (!isLoggedIn) return;
+      if (userData.role !== 'Admin' && userData.role !== 'Quản trị viên cấp cao') return;
+
+      const [teacherResult, studentResult] = await Promise.all([
+        authService.listUsers({ role: 'teacher', limit: 300 }),
+        authService.listUsers({ role: 'student', limit: 600 }),
+      ]);
+
+      if (isUnmounted) return;
+
+      const teacherRows = teacherResult.ok
+        ? teacherResult.data.map(mapAccountToTeacherRow)
+        : null;
+
+      const nextPendingTeachers = teacherRows
+        ? teacherRows.filter((teacher) => String(teacher.status || '') === 'pending')
+        : null;
+
+      const nextTeachers = teacherRows
+        ? teacherRows.filter((teacher) => String(teacher.status || '') !== 'pending')
+        : null;
+
+      const nextStudents = studentResult.ok
+        ? studentResult.data.map(mapAccountToStudentRow)
+        : null;
+
+      if (!nextTeachers && !nextStudents) return;
+
+      if (nextTeachers) {
+        setTeachers(nextTeachers);
+      }
+      if (nextPendingTeachers) {
+        setPendingTeachers(nextPendingTeachers);
+      }
+      if (nextStudents) {
+        setStudents(nextStudents);
+      }
+
+      const teachersForClass = nextTeachers ?? teachers;
+      const studentsForClass = nextStudents ?? students;
+      const nextClasses = buildClassesFromUsers(teachersForClass, studentsForClass);
+      if (nextClasses.length > 0) {
+        setClasses(nextClasses);
+      }
+
+      const schoolNames = [
+        ...(teacherRows ?? teachersForClass).map((item) => String(item.school || '')),
+        ...studentsForClass.map((item) => String((item as any).school || '')),
+      ];
+      mergeSchoolsByName(schoolNames);
+      syncSchoolMetrics(
+        teacherRows ?? teachersForClass,
+        studentsForClass,
+        nextClasses.length > 0 ? nextClasses : classes,
+      );
+    };
+
+    void syncManagedUsers();
+
+    return () => {
+      isUnmounted = true;
+    };
+  }, [isLoggedIn, userData.role, managedUsersReloadToken]);
 
   useEffect(() => {
     let isUnmounted = false;
@@ -5013,6 +5454,42 @@ export default function App() {
 
       setIsResultsLoading(true);
       setResultsError('');
+      const isManagementRole = userData.role === 'Admin' || userData.role === 'Quản trị viên cấp cao';
+      if (isManagementRole) {
+        const overviewResult = await testService.getReportsOverview({
+          days: 90,
+          limit: 600,
+        });
+
+        if (!isUnmounted) {
+          if (!overviewResult.ok) {
+            const message = 'error' in overviewResult
+              ? overviewResult.error.message
+              : 'Không tải được dữ liệu báo cáo quản trị.';
+            setResultsError(message);
+          } else {
+            const mappedResults: TestResult[] = overviewResult.data.attempts.map((item) => ({
+              id: item.attemptId,
+              testId: item.templateId,
+              testTitle: item.templateTitle,
+              userId: item.userId,
+              userName: item.userName || item.username,
+              username: item.username,
+              userRole: item.userRole,
+              userClass: item.className || '',
+              userSchool: item.school || '',
+              score: Number(item.scoreTotal || 0),
+              scoreLevel: item.scoreLevel || '',
+              suggestDass21: Boolean(item.suggestDass21),
+              timestamp: new Date(item.submittedAt).getTime() || Date.now(),
+            }));
+            setTestResults(mappedResults.sort((a, b) => b.timestamp - a.timestamp));
+          }
+          setIsResultsLoading(false);
+        }
+        return;
+      }
+
       const myResults = await testService.listMyResults();
       if (!isUnmounted) {
         if (!myResults.ok) {
@@ -5030,6 +5507,7 @@ export default function App() {
             username: userData.username,
             userRole: userData.role,
             userClass: userData.className,
+            userSchool: userData.school,
             score: Number(item.scoreTotal || 0),
             scoreLevel: item.scoreLevel || '',
             scorePayload: item.scorePayload || {},
@@ -5106,10 +5584,12 @@ export default function App() {
 
   const userSchoolId = useMemo(() => {
     if (userData.role === 'Admin') {
-      return schools.find(s => s.name === userData.school)?.id || null;
+      const schoolName = String(userData.school || '').trim();
+      if (!schoolName) return null;
+      return resolveSchoolIdByName(schoolName);
     }
     return null;
-  }, [userData.school, schools, userData.role]);
+  }, [userData.school, userData.role, schools]);
 
   const filteredPendingTeachers = useMemo(() => {
     if (userData.role === 'Admin' && userSchoolId) {
@@ -5152,12 +5632,16 @@ export default function App() {
   const filteredTestResults = useMemo(() => {
     if (userData.role === 'Admin' && userSchoolId) {
       return testResults.filter(r => {
-        const student = students.find(s => s.id === r.id || s.username === r.username);
+        const directSchool = String((r as any).userSchool || '').trim();
+        if (directSchool) {
+          return resolveSchoolIdByName(directSchool) === userSchoolId;
+        }
+        const student = students.find(s => s.id === r.userId || s.username === r.username);
         return student?.schoolId === userSchoolId;
       });
     }
     return testResults;
-  }, [testResults, students, userData, userSchoolId]);
+  }, [testResults, students, userData, userSchoolId, schools]);
 
   return (
     <div className="min-h-screen flex flex-col bg-white font-sans">
@@ -5607,106 +6091,18 @@ export default function App() {
           )}
 
           {currentView === 'handbook' && (
-            <motion.div 
-              key="handbook"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="flex h-[calc(100vh-200px)]"
-            >
-              {/* Sidebar */}
-              <motion.aside 
-                initial={false}
-                animate={{ width: isSidebarOpen ? 320 : 0, opacity: isSidebarOpen ? 1 : 0 }}
-                className={cn(
-                  "border-r border-gray-100 bg-white flex flex-col z-20 relative overflow-hidden",
-                  !isSidebarOpen && "pointer-events-none"
-                )}
-              >
-                <div className="p-8 border-b border-gray-100">
-                  <div className="relative">
-                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-brand-primary/40" size={18} />
-                    <input 
-                      type="text" 
-                      placeholder="Tìm kiến thức..."
-                      className="w-full pl-12 pr-4 py-3 bg-gray-50 border-none rounded-2xl text-sm focus:ring-2 focus:ring-brand-primary/10 outline-none"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                <nav className="flex-1 overflow-y-auto p-6 space-y-8">
-                  {categories.map(category => {
-                    const sectionsInCat = filteredSections.filter(s => s.category === category);
-                    if (sectionsInCat.length === 0) return null;
-
-                    return (
-                      <div key={category} className="space-y-2">
-                        <h3 className="px-4 text-[11px] uppercase tracking-[0.2em] text-brand-primary font-black mb-4">
-                          {category}
-                        </h3>
-                        {sectionsInCat.map(section => (
-                          <button
-                            key={section.id}
-                            onClick={() => setActiveSectionId(section.id)}
-                            className={cn(
-                              "w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl text-sm transition-all group",
-                              activeSectionId === section.id 
-                                ? "bg-brand-primary text-white shadow-lg shadow-brand-primary/20" 
-                                : "hover:bg-gray-50 text-gray-600"
-                            )}
-                          >
-                            <span className={cn(
-                              "transition-colors",
-                              activeSectionId === section.id ? "text-white" : "text-brand-primary/40 group-hover:text-brand-primary"
-                            )}>
-                              {IconMap[section.icon || 'Info']}
-                            </span>
-                            <span className="flex-1 text-left font-bold truncate">{section.title}</span>
-                          </button>
-                        ))}
-                      </div>
-                    );
-                  })}
-                </nav>
-              </motion.aside>
-
-              {/* Content Area */}
-              <div className="flex-1 flex flex-col min-w-0 bg-white">
-                <div className="h-14 border-b border-gray-100 flex items-center px-8">
-                  <button 
-                    onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-                    className="p-2 hover:bg-gray-50 rounded-xl mr-6 transition-colors"
-                  >
-                    {isSidebarOpen ? <X size={20} /> : <Menu size={20} />}
-                  </button>
-                  <button 
-                    onClick={() => setIsSidebarOpen(true)}
-                    className="md:hidden p-2 hover:bg-gray-50 rounded-xl mr-2 transition-colors"
-                  >
-                    <ArrowRight size={20} className="rotate-180" />
-                  </button>
-                  <div className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em] flex items-center gap-3">
-                    <span>{activeSection.category}</span>
-                    <ChevronRight size={12} />
-                    <span className="text-brand-primary">{activeSection.title}</span>
-                  </div>
-                </div>
-                <div className="flex-1 overflow-y-auto p-12 md:p-20">
-                  <article className="max-w-3xl mx-auto">
-                    <div className="mb-12">
-                      <span className="text-brand-primary/60 font-black text-[11px] uppercase tracking-[0.3em] mb-4 block">{activeSection.category}</span>
-                      <h2 className="text-5xl font-serif italic text-brand-primary leading-tight">{activeSection.title}</h2>
-                      <div className="h-1.5 w-24 bg-brand-orange rounded-full mt-8"></div>
-                    </div>
-                    <div className="markdown-body prose prose-teal lg:prose-lg">
-                      <Markdown>{activeSection.content}</Markdown>
-                    </div>
-                  </article>
-                </div>
-              </div>
-            </motion.div>
+            <HandbookView
+              isSidebarOpen={isSidebarOpen}
+              setIsSidebarOpen={setIsSidebarOpen}
+              searchQuery={searchQuery}
+              setSearchQuery={setSearchQuery}
+              categories={categories}
+              filteredSections={filteredSections}
+              activeSectionId={activeSectionId}
+              setActiveSectionId={setActiveSectionId}
+              activeSection={activeSection}
+              iconMap={IconMap}
+            />
           )}
 
           {currentView === 'reports' && isLoggedIn && (userData.role === 'Admin' || userData.role === 'Quản trị viên cấp cao') && (
@@ -5928,6 +6324,7 @@ export default function App() {
                 schools={schools}
                 teachers={teachers}
                 classes={classes}
+                students={students}
                 userData={userData}
                 onLogout={handleLogout}
                 onViewSchool={(school) => {
@@ -5978,18 +6375,32 @@ export default function App() {
                 userData={userData}
                 onLogout={handleLogout}
                 onApprove={(id) => {
-                  const teacher = pendingTeachers.find(t => t.id === id);
-                  if (teacher) {
-                    setTeachers([...teachers, { ...teacher, id: `t${teachers.length + 1}` }]);
-                    setPendingTeachers(pendingTeachers.filter(t => t.id !== id));
-                    authService.approveTeacherAccount(teacher.username, {
-                      school: teacher.school,
-                      className: teacher.className,
-                      teacherType: teacher.teacherType || (teacher.className ? 'homeroom' : 'subject'),
-                      subject: teacher.subject || '',
-                      name: teacher.name,
+                  void (async () => {
+                    const approveResult = await authService.approveTeacherAccountById(String(id || ''));
+                    if (!approveResult.ok) {
+                      const message = 'error' in approveResult
+                        ? approveResult.error.message
+                        : 'Không phê duyệt được giáo viên.';
+                      alert(message);
+                      return;
+                    }
+
+                    const approvedTeacher = mapAccountToTeacherRow(approveResult.data);
+                    setPendingTeachers((prev) => prev.filter((teacher) => String(teacher.id) !== String(id)));
+                    setTeachers((prev) => {
+                      const exists = prev.some((teacher) => String(teacher.id) === String(approvedTeacher.id));
+                      if (exists) {
+                        return prev.map((teacher) => (
+                          String(teacher.id) === String(approvedTeacher.id)
+                            ? { ...teacher, ...approvedTeacher }
+                            : teacher
+                        ));
+                      }
+                      return [...prev, approvedTeacher];
                     });
-                  }
+                    mergeSchoolsByName([approvedTeacher.school || '']);
+                    setManagedUsersReloadToken((prev) => prev + 1);
+                  })();
                 }}
                 onDeleteTeacher={onDeleteTeacher}
                 onViewClass={(cls) => {
@@ -6107,6 +6518,7 @@ export default function App() {
                     username: userData.username,
                     userRole: userData.role,
                     userClass: userData.className,
+                    userSchool: userData.school,
                     score: submitResult.data.scoreTotal,
                     scoreLevel: submitResult.data.scoreLevel,
                     scorePayload: submitResult.data.scorePayload,
@@ -6369,12 +6781,15 @@ export default function App() {
             )
           )}
 
-                    {currentView === 'auth' && (
+          {currentView === 'auth' && (
             <AuthView
               teacherRegCode={teacherRegCode}
               schools={schools}
               onBack={() => setCurrentView('home')}
-              onTeacherPending={(teacher) => setPendingTeachers((prev) => [...prev, teacher])}
+              onTeacherPending={(teacher) => {
+                mergeSchoolsByName([String(teacher?.school || '')]);
+                setManagedUsersReloadToken((prev) => prev + 1);
+              }}
               onLoginSuccess={(account) => {
                 setIsLoggedIn(true);
                 setUserData(buildUserDataFromAccount(account));
@@ -6419,7 +6834,21 @@ export default function App() {
               onClick={() => setIsChatOpen(!isChatOpen)}
               className="w-14 h-14 bg-brand-primary rounded-[1.25rem] flex items-center justify-center text-white shadow-xl shadow-brand-primary/30 hover:scale-110 transition-transform relative"
             >
-              <MessageCircle size={28} />
+              <span className="w-10 h-10 rounded-2xl bg-white/95 flex items-center justify-center shadow-md">
+                <img
+                  src="/chatbot_mascot.png"
+                  alt="Chatbot Trạm An"
+                  className="w-8 h-8 rounded-xl object-cover"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none';
+                    const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
+                    if (fallback) fallback.style.display = 'flex';
+                  }}
+                />
+                <span className="hidden items-center justify-center text-brand-primary">
+                  <MessageCircle size={20} />
+                </span>
+              </span>
               {!isChatOpen && <span className="absolute -top-1 -right-1 w-5 h-5 bg-brand-orange rounded-full border-4 border-white animate-pulse"></span>}
             </button>
           </div>
@@ -6437,8 +6866,20 @@ export default function App() {
           >
             <div className="bg-brand-primary p-6 flex items-center justify-between text-white">
               <div className="flex items-center gap-4">
-                <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center">
-                  <BookOpen size={24} />
+                <div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center">
+                  <img
+                    src="/chatbot_mascot.png"
+                    alt="Mascot Trạm An"
+                    className="w-9 h-9 rounded-xl object-cover bg-white/90"
+                    onError={(e) => {
+                      e.currentTarget.style.display = 'none';
+                      const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
+                      if (fallback) fallback.style.display = 'flex';
+                    }}
+                  />
+                  <span className="hidden items-center justify-center">
+                    <BookOpen size={24} />
+                  </span>
                 </div>
                 <div>
                   <p className="text-sm font-black uppercase tracking-widest">Hỗ trợ Trạm an</p>
@@ -6453,27 +6894,101 @@ export default function App() {
               </button>
             </div>
             <div className="h-80 p-6 overflow-y-auto bg-gray-50 flex flex-col gap-4">
-              {chatMessages.map((item) => (
-                <div
-                  key={item.id}
-                  className={cn(
-                    'p-4 rounded-3xl shadow-sm text-sm max-w-[85%] leading-relaxed',
-                    item.role === 'assistant'
-                      ? 'bg-white text-gray-600 rounded-tl-none'
-                      : 'bg-brand-primary text-white rounded-tr-none self-end shadow-md',
-                  )}
-                >
-                  <p>{item.text}</p>
-                  {item.role === 'assistant' && item.sources && item.sources.length > 0 && (
-                    <p className="mt-2 text-[10px] text-gray-400">
-                      Nguồn: {item.sources.join(', ')}
-                    </p>
-                  )}
-                </div>
-              ))}
+              {chatMessages.map((item, index) => {
+                const previousUserMessage = item.role === 'assistant'
+                  ? [...chatMessages.slice(0, index)].reverse().find((message) => message.role === 'user')
+                  : null;
+                const relatedSectionIds = item.role === 'assistant'
+                  ? (
+                    Array.isArray(item.handbookSectionIds) && item.handbookSectionIds.length > 0
+                      ? item.handbookSectionIds
+                      : suggestHandbookSectionIds(item.text, previousUserMessage?.text || '', item.sources || [])
+                  )
+                  : [];
+
+                return (
+                  <div
+                    key={item.id}
+                    className={cn(
+                      'w-full flex',
+                      item.role === 'assistant' ? 'items-end gap-2.5' : 'justify-end',
+                    )}
+                  >
+                    {item.role === 'assistant' && (
+                      <div className="w-8 h-8 rounded-xl bg-white border border-gray-200 shadow-sm overflow-hidden shrink-0 mb-1">
+                        <img
+                          src="/chatbot_mascot.png"
+                          alt="Bé Trạm"
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                            const fallback = e.currentTarget.nextElementSibling as HTMLElement | null;
+                            if (fallback) fallback.style.display = 'flex';
+                          }}
+                        />
+                        <span className="hidden w-full h-full items-center justify-center text-brand-primary bg-white">
+                          <MessageCircle size={14} />
+                        </span>
+                      </div>
+                    )}
+                    <div
+                      className={cn(
+                        'p-4 rounded-3xl shadow-sm text-sm leading-relaxed max-w-[85%]',
+                        item.role === 'assistant'
+                          ? 'bg-white text-gray-600 rounded-tl-none'
+                          : 'bg-brand-primary text-white rounded-tr-none shadow-md',
+                      )}
+                    >
+                      <p>{item.text}</p>
+                      {item.role === 'assistant' && (
+                        <div className="mt-3 space-y-2">
+                          {item.sources && item.sources.length > 0 && (
+                            <div className="flex flex-wrap gap-2">
+                              {item.sources.map((source) => (
+                                <span
+                                  key={`${item.id}-${source}`}
+                                  className="px-2 py-1 rounded-full bg-gray-100 text-[10px] font-bold text-gray-500"
+                                >
+                                  {toDisplaySourceLabel(source)}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {relatedSectionIds.length > 0 && (
+                            <div className="flex flex-wrap gap-2">
+                              {relatedSectionIds.map((sectionId) => (
+                                <button
+                                  key={`${item.id}-section-${sectionId}`}
+                                  onClick={() => {
+                                    setActiveSectionId(sectionId);
+                                    setCurrentView('handbook');
+                                    setIsChatOpen(false);
+                                  }}
+                                  className="px-2.5 py-1 rounded-full bg-brand-primary/10 text-[10px] font-black text-brand-primary hover:bg-brand-primary hover:text-white transition-all"
+                                >
+                                  Mở cẩm nang: {getHandbookSectionTitle(sectionId)}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
               {isChatSending && (
-                <div className="bg-white p-4 rounded-3xl rounded-tl-none shadow-sm text-sm text-gray-500 max-w-[85%] leading-relaxed">
-                  Bé Trạm đang suy nghĩ...
+                <div className="w-full flex items-end gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-white border border-gray-200 shadow-sm overflow-hidden shrink-0 mb-1">
+                    <img
+                      src="/chatbot_mascot.png"
+                      alt="Bé Trạm"
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <div className="bg-white p-4 rounded-3xl rounded-tl-none shadow-sm text-sm text-gray-500 max-w-[85%] leading-relaxed">
+                    Bé Trạm đang suy nghĩ...
+                  </div>
                 </div>
               )}
             </div>

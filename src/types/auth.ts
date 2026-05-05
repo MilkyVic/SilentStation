@@ -177,6 +177,11 @@ export type AuthApiClassCodeEventsResponse = {
   events: AuthApiClassCodeEvent[];
 };
 
+export type AuthApiUsersListResponse = {
+  ok: true;
+  users: AuthApiUser[];
+};
+
 
 export type AuthApiRegisterOtpResponse = {
   ok: true;

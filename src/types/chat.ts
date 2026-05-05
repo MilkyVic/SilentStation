@@ -6,6 +6,7 @@ export type ChatUiMessage = {
   text: string;
   createdAt: number;
   sources?: string[];
+  handbookSectionIds?: string[];
 };
 
 export type ChatApiSuccessResponse = {
@@ -14,6 +15,7 @@ export type ChatApiSuccessResponse = {
   reply: string;
   usedFallback: boolean;
   sources: string[];
+  handbookSectionIds?: string[];
   memorySize: number;
 };
 
@@ -24,4 +26,3 @@ export type ChatApiErrorResponse = {
     message: string;
   };
 };
-

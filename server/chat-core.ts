@@ -187,6 +187,34 @@ const SCOPE_STOPWORDS = new Set([
   'viet', 'ham', 'code', 'javascript',
 ]);
 
+const HANDBOOK_INTENT_RULES: Array<{ id: string; keywords: string[]; score: number }> = [
+  {
+    id: 'nhan-dien-may-den',
+    score: 4,
+    keywords: ['ap luc', 'stress', 'fomo', 'lo au', 'hoang loan', 'tram cam', 'cyberbullying', 'bat nat'],
+  },
+  {
+    id: 'bi-kip-f5',
+    score: 4,
+    keywords: ['pomodoro', '4 7 8', 'grounding', '5 4 3 2 1', 'tipp', 'tho sau', '3c', 'catch check change', 'f5'],
+  },
+  {
+    id: 'len-tieng-khi-can',
+    score: 3,
+    keywords: ['len tieng', 'tim nguoi lon', 'tham van', 'xin ho tro', 'bao co giao', 'bao thay co'],
+  },
+  {
+    id: 'danh-ba-lien-he',
+    score: 5,
+    keywords: ['111', '115', '1900 1267', '096 306 1414', 'hotline', 'khan cap'],
+  },
+  {
+    id: 'goc-go-roi',
+    score: 2,
+    keywords: ['hoi dap', 'q a', 'giai dap', 'go roi'],
+  },
+];
+
 const detectRedCode = (input: string) => {
   const normalized = normalizeForRiskDetection(input);
   const compact = compactForRiskDetection(input);
@@ -238,6 +266,45 @@ const detectOutOfScope = (input: string, knowledgeChunks: KnowledgeChunk[]) => {
   }
 
   return true;
+};
+
+const inferHandbookSectionIds = ({
+  incomingMessage,
+  reply,
+  sources = [],
+  contextChunks = [],
+}: {
+  incomingMessage: string;
+  reply: string;
+  sources?: string[];
+  contextChunks?: KnowledgeChunk[];
+}) => {
+  const mergedText = normalizeForRiskDetection(`${incomingMessage} ${reply}`);
+  const scoreMap = new Map<string, number>();
+
+  HANDBOOK_INTENT_RULES.forEach((rule) => {
+    const matchedCount = rule.keywords.reduce((count, keyword) => {
+      const normalizedKeyword = normalizeForRiskDetection(keyword);
+      return normalizedKeyword && mergedText.includes(normalizedKeyword) ? count + 1 : count;
+    }, 0);
+    if (matchedCount > 0) {
+      scoreMap.set(rule.id, (scoreMap.get(rule.id) || 0) + (matchedCount * rule.score));
+    }
+  });
+
+  if (sources.includes('red-code-protocol')) {
+    scoreMap.set('danh-ba-lien-he', (scoreMap.get('danh-ba-lien-he') || 0) + 20);
+    scoreMap.set('len-tieng-khi-can', (scoreMap.get('len-tieng-khi-can') || 0) + 12);
+  }
+
+  if (!scoreMap.size && contextChunks.length > 0) {
+    scoreMap.set('goc-go-roi', 1);
+  }
+
+  return Array.from(scoreMap.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([id]) => id)
+    .slice(0, 2);
 };
 
 const tokenize = (input: string) => (
@@ -488,6 +555,12 @@ export const sendChatMessage = async (payload: unknown) => {
       reply,
       usedFallback: false,
       sources: ['red-code-protocol'],
+      handbookSectionIds: inferHandbookSectionIds({
+        incomingMessage,
+        reply,
+        sources: ['red-code-protocol'],
+        contextChunks: [],
+      }),
       memorySize: session.messages.length,
       safetyTriggered: true,
     };
@@ -509,6 +582,12 @@ export const sendChatMessage = async (payload: unknown) => {
       reply,
       usedFallback: false,
       sources: ['scope-guard'],
+      handbookSectionIds: inferHandbookSectionIds({
+        incomingMessage,
+        reply,
+        sources: ['scope-guard'],
+        contextChunks: [],
+      }),
       memorySize: session.messages.length,
       scopeRedirected: true,
     };
@@ -564,6 +643,12 @@ export const sendChatMessage = async (payload: unknown) => {
     reply,
     usedFallback,
     sources: contextChunks.length ? ['knowledge-base'] : [],
+    handbookSectionIds: inferHandbookSectionIds({
+      incomingMessage,
+      reply,
+      sources: contextChunks.length ? ['knowledge-base'] : [],
+      contextChunks,
+    }),
     memorySize: session.messages.length,
   };
 };
