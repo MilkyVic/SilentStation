@@ -170,6 +170,40 @@ const TEST_AUTH_ACCOUNTS: AuthAccount[] = [
     },
   },
   {
+    id: 'acc-teacher-pending-1',
+    username: 'teacher_pending_test',
+    password: '123456',
+    role: 'Giáo viên',
+    status: 'pending',
+    profile: {
+      name: 'Giáo viên chờ duyệt 1',
+      email: 'teacher_pending_test@tram-an.vn',
+      birthYear: '1991',
+      gender: 'Nữ',
+      school: 'THPT Chuyên Hà Nội - Amsterdam',
+      className: '11A1',
+      teacherType: 'homeroom',
+      subject: '',
+    },
+  },
+  {
+    id: 'acc-teacher-pending-2',
+    username: 'teacher_pending_subject_test',
+    password: '123456',
+    role: 'Giáo viên',
+    status: 'pending',
+    profile: {
+      name: 'Giáo viên chờ duyệt 2',
+      email: 'teacher_pending_subject_test@tram-an.vn',
+      birthYear: '1990',
+      gender: 'Nam',
+      school: 'THPT Chuyên Hà Nội - Amsterdam',
+      className: '',
+      teacherType: 'subject',
+      subject: 'van',
+    },
+  },
+  {
     id: 'acc-admin-1',
     username: 'admin_test',
     password: '123456',
@@ -1087,6 +1121,66 @@ export const authService = {
     }
 
     return { ok: true, data: approved };
+  },
+
+  async rejectTeacherAccountById(teacherId: string): Promise<ServiceResult<{ teacherId: string }>> {
+    const normalizedTeacherId = String(teacherId || '').trim();
+    if (!normalizedTeacherId) {
+      return makeError('AUTH_SERVER_ERROR', 'Thiếu mã giáo viên cần từ chối.') as ServiceResult<{ teacherId: string }>;
+    }
+
+    const token = getStoredToken();
+    if (!token) {
+      return makeError('AUTH_INVALID_CREDENTIALS', 'Phiên đăng nhập không hợp lệ.') as ServiceResult<{ teacherId: string }>;
+    }
+
+    const payload = await callUsersApi('/reject-teacher', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ teacherId: normalizedTeacherId }),
+    });
+
+    if (payload && typeof payload === 'object') {
+      const result = payload as {
+        ok?: boolean;
+        error?: { code?: AuthErrorCode; message?: string };
+        teacherId?: string;
+      };
+
+      if (!result.ok || !result.teacherId) {
+        return {
+          ok: false,
+          error: {
+            code: result.error?.code || 'AUTH_SERVER_ERROR',
+            message: result.error?.message || 'Không từ chối được giáo viên.',
+          },
+        };
+      }
+
+      accounts = accounts.filter((account) => String(account.id) !== String(result.teacherId));
+      return { ok: true, data: { teacherId: String(result.teacherId) } };
+    }
+
+    if (!shouldUseLocalFallback()) {
+      return makeError('AUTH_SERVER_ERROR', 'Không kết nối được máy chủ từ chối giáo viên.') as ServiceResult<{ teacherId: string }>;
+    }
+
+    const localTeacher = accounts.find(
+      (account) => account.id === normalizedTeacherId && account.role === 'Giáo viên',
+    );
+
+    if (!localTeacher) {
+      return makeError('AUTH_SERVER_ERROR', 'Không tìm thấy giáo viên cần từ chối.') as ServiceResult<{ teacherId: string }>;
+    }
+
+    if (localTeacher.status !== 'pending') {
+      return makeError('AUTH_SERVER_ERROR', 'Chỉ có thể từ chối giáo viên đang chờ duyệt.') as ServiceResult<{ teacherId: string }>;
+    }
+
+    accounts = accounts.filter((account) => account.id !== normalizedTeacherId);
+    return { ok: true, data: { teacherId: normalizedTeacherId } };
   },
 
   async createAdmin(payload: {

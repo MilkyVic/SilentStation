@@ -3836,6 +3836,8 @@ const TeacherClassView = ({
 
 const TeacherListView = ({ 
   teachers, 
+  pendingTeachers,
+  initialTypeFilter,
   onBack,
   onViewTeacher,
   userData,
@@ -3844,6 +3846,8 @@ const TeacherListView = ({
   setFilterSchoolId
 }: { 
   teachers: any[], 
+  pendingTeachers: any[],
+  initialTypeFilter?: 'all' | 'homeroom' | 'subject' | 'pending',
   onBack: () => void,
   onViewTeacher: (teacher: any) => void,
   userData: any,
@@ -3853,7 +3857,24 @@ const TeacherListView = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [schoolFilter, setSchoolFilter] = useState('all');
-  const [teacherTypeFilter, setTeacherTypeFilter] = useState<'all' | 'homeroom' | 'subject'>('all');
+  const [teacherTypeFilter, setTeacherTypeFilter] = useState<'all' | 'homeroom' | 'subject' | 'pending'>(initialTypeFilter || 'all');
+
+  useEffect(() => {
+    if (initialTypeFilter) {
+      setTeacherTypeFilter(initialTypeFilter);
+    }
+  }, [initialTypeFilter]);
+
+  const allTeachers = useMemo(() => {
+    const merged = [...teachers, ...pendingTeachers];
+    const byId = new Map<string, any>();
+    merged.forEach((teacher) => {
+      const id = String(teacher?.id || '');
+      if (!id) return;
+      byId.set(id, teacher);
+    });
+    return Array.from(byId.values());
+  }, [teachers, pendingTeachers]);
 
   const resolveTeacherType = (teacher: any) => {
     if (teacher.teacherType === 'homeroom' || teacher.teacherType === 'subject') {
@@ -3866,32 +3887,35 @@ const TeacherListView = ({
     () =>
       Array.from(
         new Set(
-          teachers
+          allTeachers
             .map((teacher) => (teacher.school || '').trim())
             .filter((schoolName) => schoolName.length > 0),
         ),
       ).sort((a, b) => a.localeCompare(b, 'vi')),
-    [teachers],
+    [allTeachers],
   );
 
   const teacherStats = useMemo(() => {
     const homeroomCount = teachers.filter((teacher) => resolveTeacherType(teacher) === 'homeroom').length;
     return {
-      total: teachers.length,
+      total: teachers.length + pendingTeachers.length,
       homeroom: homeroomCount,
       subject: teachers.length - homeroomCount,
+      pending: pendingTeachers.length,
     };
-  }, [teachers]);
+  }, [teachers, pendingTeachers]);
 
   const filteredTeachers = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
 
-    return teachers.filter((teacher) => {
+    return allTeachers.filter((teacher) => {
       const isHomeroom = resolveTeacherType(teacher) === 'homeroom';
+      const isPending = String(teacher.status || '') === 'pending';
       const matchesType =
         teacherTypeFilter === 'all' ||
-        (teacherTypeFilter === 'homeroom' && isHomeroom) ||
-        (teacherTypeFilter === 'subject' && !isHomeroom);
+        (teacherTypeFilter === 'homeroom' && isHomeroom && !isPending) ||
+        (teacherTypeFilter === 'subject' && !isHomeroom && !isPending) ||
+        (teacherTypeFilter === 'pending' && isPending);
 
       if (!matchesType) return false;
 
@@ -3907,7 +3931,7 @@ const TeacherListView = ({
         (teacher.subject && teacher.subject.toLowerCase().includes(query))
       );
     });
-  }, [searchQuery, schoolFilter, teacherTypeFilter, teachers]);
+  }, [searchQuery, schoolFilter, teacherTypeFilter, allTeachers]);
 
   return (
     <ManagementLayout 
@@ -3940,6 +3964,9 @@ const TeacherListView = ({
             </span>
             <span className="px-4 py-2 rounded-full bg-gray-100 text-gray-500 text-[10px] font-black uppercase tracking-widest">
               Bộ môn: {teacherStats.subject}
+            </span>
+            <span className="px-4 py-2 rounded-full bg-amber-100 text-amber-700 text-[10px] font-black uppercase tracking-widest">
+              Chờ duyệt: {teacherStats.pending}
             </span>
           </div>
         </div>
@@ -3974,10 +4001,11 @@ const TeacherListView = ({
                 { id: 'all', label: 'Tất cả' },
                 { id: 'homeroom', label: 'Giáo viên chủ nhiệm' },
                 { id: 'subject', label: 'Giáo viên bộ môn' },
+                { id: 'pending', label: 'Đang chờ phê duyệt' },
               ].map((item) => (
                 <button
                   key={item.id}
-                  onClick={() => setTeacherTypeFilter(item.id as 'all' | 'homeroom' | 'subject')}
+                  onClick={() => setTeacherTypeFilter(item.id as 'all' | 'homeroom' | 'subject' | 'pending')}
                   className={cn(
                     'px-4 py-3 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all',
                     teacherTypeFilter === item.id
@@ -4015,6 +4043,11 @@ const TeacherListView = ({
                         Bộ môn {teacher.subject ? `- ${teacher.subject}` : ''}
                       </span>
                     )}
+                    {String(teacher.status || '') === 'pending' && (
+                      <span className="px-3 py-1 bg-amber-100 text-amber-700 text-[10px] uppercase tracking-widest rounded-full font-black">
+                        Chờ phê duyệt
+                      </span>
+                    )}
                   </div>
                   <p className="text-[12px] font-medium text-gray-500 truncate flex items-center gap-2 mt-2">
                     <School size={14} /> {teacher.school}
@@ -4037,6 +4070,7 @@ const TeacherListView = ({
 
 const AdminView = ({ 
   setCurrentView, 
+  onOpenPendingTeachers,
   pendingTeachers, 
   onApprove,
   onDeleteTeacher,
@@ -4053,6 +4087,7 @@ const AdminView = ({
   onChangePassword
 }: { 
   setCurrentView: (view: View) => void,
+  onOpenPendingTeachers: () => void,
   pendingTeachers: any[],
   onApprove: (id: string) => void,
   onDeleteTeacher: (id: string) => void,
@@ -4194,7 +4229,7 @@ const AdminView = ({
               </div>
             </div>
             <button 
-              onClick={() => setCurrentView('teacher-list')}
+              onClick={onOpenPendingTeachers}
               className="px-8 py-4 bg-brand-orange text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:shadow-xl transition-all"
             >
               XEM TẤT CẢ
@@ -4603,6 +4638,7 @@ export default function App() {
   const [selectedTeacher, setSelectedTeacher] = useState<any>(null);
   const [isTeacherDetailOpen, setIsTeacherDetailOpen] = useState(false);
   const [isEditingTeacher, setIsEditingTeacher] = useState(false);
+  const [isTeacherReviewLoading, setIsTeacherReviewLoading] = useState(false);
   const [editingTeacherOriginalName, setEditingTeacherOriginalName] = useState('');
   const [adminPasswordPrompt, setAdminPasswordPrompt] = useState<{isOpen: boolean, callback: (() => void) | null}>({ isOpen: false, callback: null });
   const [filterSchoolId, setFilterSchoolId] = useState<string | null>(null);
@@ -4794,6 +4830,7 @@ export default function App() {
   const [isResultsLoading, setIsResultsLoading] = useState(false);
   const [resultsError, setResultsError] = useState('');
   const [pendingTeachers, setPendingTeachers] = useState<any[]>([]);
+  const [teacherListInitialTypeFilter, setTeacherListInitialTypeFilter] = useState<'all' | 'homeroom' | 'subject' | 'pending'>('all');
   const [managedUsersReloadToken, setManagedUsersReloadToken] = useState(0);
   const [selectedCenter, setSelectedCenter] = useState<number | null>(null);
   const [teacherRegCode, setTeacherRegCode] = useState<{ code: string, expiry: number, className?: string } | null>(null);
@@ -5185,6 +5222,66 @@ export default function App() {
     mergeSchoolsByName([createdAdmin.profile.school || school]);
 
     alert(`Đã tạo Admin @${createdAdmin.username}. Mật khẩu tạm: ${password}`);
+  };
+
+  const closeTeacherDetailModal = () => {
+    setIsTeacherDetailOpen(false);
+    setSelectedTeacher(null);
+    setIsEditingTeacher(false);
+    setEditingTeacherOriginalName('');
+    setIsTeacherReviewLoading(false);
+  };
+
+  const handleApproveTeacherById = async (teacherId: string) => {
+    const approveResult = await authService.approveTeacherAccountById(String(teacherId || ''));
+    if (!approveResult.ok) {
+      const message = 'error' in approveResult
+        ? approveResult.error.message
+        : 'Không phê duyệt được giáo viên.';
+      alert(message);
+      return null;
+    }
+
+    const approvedTeacher = mapAccountToTeacherRow(approveResult.data);
+    setPendingTeachers((prev) => prev.filter((teacher) => String(teacher.id) !== String(teacherId)));
+    setTeachers((prev) => {
+      const exists = prev.some((teacher) => String(teacher.id) === String(approvedTeacher.id));
+      if (exists) {
+        return prev.map((teacher) => (
+          String(teacher.id) === String(approvedTeacher.id)
+            ? { ...teacher, ...approvedTeacher }
+            : teacher
+        ));
+      }
+      return [...prev, approvedTeacher];
+    });
+    setSelectedTeacher((prev: any) => {
+      if (!prev || String(prev.id) !== String(approvedTeacher.id)) return prev;
+      return { ...prev, ...approvedTeacher };
+    });
+    mergeSchoolsByName([approvedTeacher.school || '']);
+    setManagedUsersReloadToken((prev) => prev + 1);
+    return approvedTeacher;
+  };
+
+  const handleRejectTeacherById = async (teacherId: string) => {
+    const rejectResult = await authService.rejectTeacherAccountById(String(teacherId || ''));
+    if (!rejectResult.ok) {
+      const message = 'error' in rejectResult
+        ? rejectResult.error.message
+        : 'Không từ chối được giáo viên.';
+      alert(message);
+      return false;
+    }
+
+    setPendingTeachers((prev) => prev.filter((teacher) => String(teacher.id) !== String(teacherId)));
+    setTeachers((prev) => prev.filter((teacher) => String(teacher.id) !== String(teacherId)));
+    setManagedUsersReloadToken((prev) => prev + 1);
+
+    if (selectedTeacher && String(selectedTeacher.id) === String(teacherId)) {
+      closeTeacherDetailModal();
+    }
+    return true;
   };
 
   const onDeleteTeacher = (id: string) => {
@@ -5584,6 +5681,12 @@ export default function App() {
       setCurrentView('home');
     }
   }, [isLoggedIn, userData.role, userData.className, userData.teacherType, currentView]);
+
+  useEffect(() => {
+    if (currentView !== 'teacher-list' && teacherListInitialTypeFilter !== 'all') {
+      setTeacherListInitialTypeFilter('all');
+    }
+  }, [currentView, teacherListInitialTypeFilter]);
 
   const userSchoolId = useMemo(() => {
     if (userData.role === 'Admin') {
@@ -6252,7 +6355,10 @@ export default function App() {
             >
               <TeacherListView 
                 teachers={filteredTeachers}
+                pendingTeachers={filteredPendingTeachers}
+                initialTypeFilter={teacherListInitialTypeFilter}
                 onBack={() => {
+                  setTeacherListInitialTypeFilter('all');
                   if (userData.role === 'Quản trị viên cấp cao') {
                     if (filterSchoolId) {
                       setFilterSchoolId(null);
@@ -6380,6 +6486,10 @@ export default function App() {
             >
               <AdminView 
                 setCurrentView={setCurrentView} 
+                onOpenPendingTeachers={() => {
+                  setTeacherListInitialTypeFilter('pending');
+                  setCurrentView('teacher-list');
+                }}
                 pendingTeachers={filteredPendingTeachers}
                 teachers={filteredTeachers}
                 classes={filteredClasses}
@@ -6389,30 +6499,7 @@ export default function App() {
                 onLogout={handleLogout}
                 onApprove={(id) => {
                   void (async () => {
-                    const approveResult = await authService.approveTeacherAccountById(String(id || ''));
-                    if (!approveResult.ok) {
-                      const message = 'error' in approveResult
-                        ? approveResult.error.message
-                        : 'Không phê duyệt được giáo viên.';
-                      alert(message);
-                      return;
-                    }
-
-                    const approvedTeacher = mapAccountToTeacherRow(approveResult.data);
-                    setPendingTeachers((prev) => prev.filter((teacher) => String(teacher.id) !== String(id)));
-                    setTeachers((prev) => {
-                      const exists = prev.some((teacher) => String(teacher.id) === String(approvedTeacher.id));
-                      if (exists) {
-                        return prev.map((teacher) => (
-                          String(teacher.id) === String(approvedTeacher.id)
-                            ? { ...teacher, ...approvedTeacher }
-                            : teacher
-                        ));
-                      }
-                      return [...prev, approvedTeacher];
-                    });
-                    mergeSchoolsByName([approvedTeacher.school || '']);
-                    setManagedUsersReloadToken((prev) => prev + 1);
+                    await handleApproveTeacherById(String(id || ''));
                   })();
                 }}
                 onDeleteTeacher={onDeleteTeacher}
@@ -7102,11 +7189,7 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => {
-                setIsTeacherDetailOpen(false);
-                setIsEditingTeacher(false);
-                setEditingTeacherOriginalName('');
-              }}
+              onClick={closeTeacherDetailModal}
               className="absolute inset-0 bg-black/40 backdrop-blur-sm"
             />
             <motion.div 
@@ -7117,11 +7200,7 @@ export default function App() {
             >
               <div className="bg-brand-orange p-10 text-white text-center relative shrink-0">
                 <button 
-                  onClick={() => {
-                    setIsTeacherDetailOpen(false);
-                    setIsEditingTeacher(false);
-                    setEditingTeacherOriginalName('');
-                  }}
+                  onClick={closeTeacherDetailModal}
                   className="absolute top-6 right-6 p-2 hover:bg-white/10 rounded-xl transition-colors"
                 >
                   <X size={20} />
@@ -7130,7 +7209,9 @@ export default function App() {
                   {selectedTeacher.name.charAt(0)}
                 </div>
                 <h3 className="text-2xl font-black tracking-tight">{selectedTeacher.name}</h3>
-                <p className="text-white/60 text-sm font-bold uppercase tracking-widest mt-1">GIÁO VIÊN TRẠM AN</p>
+                <p className="text-white/60 text-sm font-bold uppercase tracking-widest mt-1">
+                  {String(selectedTeacher.status || '') === 'pending' ? 'GIÁO VIÊN ĐANG CHỜ PHÊ DUYỆT' : 'GIÁO VIÊN TRẠM AN'}
+                </p>
               </div>
               
               <div className="p-10 space-y-6 overflow-y-auto no-scrollbar">
@@ -7245,7 +7326,50 @@ export default function App() {
                     </div>
                   </div>
                 <div className="pt-4 flex gap-4">
-                  {isEditingTeacher ? (
+                  {String(selectedTeacher.status || '') === 'pending' && !isEditingTeacher ? (
+                    <>
+                      <button
+                        onClick={() => {
+                          void (async () => {
+                            setIsTeacherReviewLoading(true);
+                            const approvedTeacher = await handleApproveTeacherById(String(selectedTeacher.id || ''));
+                            setIsTeacherReviewLoading(false);
+                            if (!approvedTeacher) return;
+                            setSelectedTeacher(approvedTeacher);
+                          })();
+                        }}
+                        disabled={isTeacherReviewLoading}
+                        className={cn(
+                          'flex-1 py-4 rounded-2xl font-black text-sm transition-all',
+                          isTeacherReviewLoading
+                            ? 'bg-brand-primary/40 text-white cursor-not-allowed'
+                            : 'bg-brand-primary text-white shadow-lg shadow-brand-primary/20 hover:scale-[1.02]',
+                        )}
+                      >
+                        {isTeacherReviewLoading ? 'ĐANG XỬ LÝ...' : 'PHÊ DUYỆT'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (!window.confirm('Bạn chắc chắn muốn từ chối giáo viên này?')) return;
+                          void (async () => {
+                            setIsTeacherReviewLoading(true);
+                            const rejected = await handleRejectTeacherById(String(selectedTeacher.id || ''));
+                            setIsTeacherReviewLoading(false);
+                            if (!rejected) return;
+                          })();
+                        }}
+                        disabled={isTeacherReviewLoading}
+                        className={cn(
+                          'flex-1 py-4 rounded-2xl font-black text-sm transition-all',
+                          isTeacherReviewLoading
+                            ? 'bg-red-100 text-red-300 cursor-not-allowed'
+                            : 'bg-red-100 text-red-600 hover:bg-red-200',
+                        )}
+                      >
+                        TỪ CHỐI
+                      </button>
+                    </>
+                  ) : isEditingTeacher ? (
                     <button 
                       onClick={handleSaveTeacherProfile}
                       className="flex-1 bg-brand-primary text-white py-4 rounded-2xl font-black text-sm shadow-lg shadow-brand-primary/20 hover:scale-[1.02] transition-all"
@@ -7264,11 +7388,7 @@ export default function App() {
                     </button>
                   )}
                   <button 
-                    onClick={() => {
-                      setIsTeacherDetailOpen(false);
-                      setIsEditingTeacher(false);
-                      setEditingTeacherOriginalName('');
-                    }}
+                    onClick={closeTeacherDetailModal}
                     className="flex-1 bg-gray-100 text-gray-600 py-4 rounded-2xl font-black text-sm hover:bg-gray-200 transition-all"
                   >
                     ĐÓNG

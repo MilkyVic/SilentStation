@@ -10,6 +10,7 @@ import {
   issueRegisterOtp,
   listAdminAccounts,
   approveTeacherAccount,
+  rejectTeacherAccount,
   listScopedUsers,
   listActiveClassJoinCodes,
   listClassJoinCodeEvents,
@@ -119,6 +120,11 @@ app.get('/api/users', asyncHandler(async (req, res) => {
 
 app.post('/api/users/approve-teacher', asyncHandler(async (req, res) => {
   const data = await approveTeacherAccount(getBearerToken(req), req.body ?? {});
+  res.status(200).json({ ok: true, ...data });
+}));
+
+app.post('/api/users/reject-teacher', asyncHandler(async (req, res) => {
+  const data = await rejectTeacherAccount(getBearerToken(req), req.body ?? {});
   res.status(200).json({ ok: true, ...data });
 }));
 

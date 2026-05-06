@@ -251,6 +251,42 @@ const seedAccounts = [
         },
     },
     {
+        id: 'acc-teacher-pending-1',
+        username: 'teacher_pending_test',
+        password: '123456',
+        role: 'teacher',
+        status: 'pending',
+        profile: {
+            name: 'Giao vien cho duyet 1',
+            email: 'teacher_pending_test@tram-an.vn',
+            birthYear: '1991',
+            gender: 'Nu',
+            school: 'THPT Chuyên Hà Nội - Amsterdam',
+            className: '11A1',
+            phone: '',
+            teacherType: 'homeroom',
+            subject: '',
+        },
+    },
+    {
+        id: 'acc-teacher-pending-2',
+        username: 'teacher_pending_subject_test',
+        password: '123456',
+        role: 'teacher',
+        status: 'pending',
+        profile: {
+            name: 'Giao vien cho duyet 2',
+            email: 'teacher_pending_subject_test@tram-an.vn',
+            birthYear: '1990',
+            gender: 'Nam',
+            school: 'THPT Chuyên Hà Nội - Amsterdam',
+            className: '',
+            phone: '',
+            teacherType: 'subject',
+            subject: 'van',
+        },
+    },
+    {
         id: 'acc-admin-1',
         username: 'admin_test',
         password: '123456',
@@ -406,6 +442,38 @@ const sendAdminLoginOtpEmail = async ({ email, otpCode, fullName, role }) => {
     await mailer.sendMail({
         from: AUTH_EMAIL_FROM,
         to: email,
+        subject,
+        text: bodyText,
+    });
+    return true;
+};
+const sendTeacherRejectedEmail = async ({ email, fullName, adminName, school }) => {
+    const mailer = getRegisterOtpMailer();
+    if (!mailer)
+        return false;
+    const normalizedEmail = normalizeEmail(email || '');
+    if (!normalizedEmail || !normalizedEmail.includes('@'))
+        return false;
+    const greetingName = fullName || 'ban';
+    const reviewerName = adminName || 'admin';
+    const schoolText = school ? `Tai truong: ${school}` : '';
+    const subject = 'Thong bao tu choi tai khoan giao vien - Tram An';
+    const bodyText = [
+        `Xin chao ${greetingName},`,
+        '',
+        'Tai khoan giao vien cua ban tren he thong Tram An da bi tu choi boi Admin.',
+        schoolText,
+        `Nguoi duyet: ${reviewerName}.`,
+        '',
+        'Neu ban can ho tro, vui long lien he bo phan quan tri nha truong de duoc huong dan dang ky lai.',
+        '',
+        'Tram An',
+    ]
+        .filter((line) => line !== '')
+        .join('\n');
+    await mailer.sendMail({
+        from: AUTH_EMAIL_FROM,
+        to: normalizedEmail,
         subject,
         text: bodyText,
     });
@@ -1524,6 +1592,77 @@ export const approveTeacherAccount = async (token, payload = {}) => {
     `, [teacherId]);
     return {
         teacher: toApiUser(mapUserRow(updatedResult.rows[0])),
+    };
+};
+export const rejectTeacherAccount = async (token, payload = {}) => {
+    await initializeAuthCore();
+    const actor = await getCurrentUser(token);
+    if (actor.role !== 'superadmin' && actor.role !== 'admin') {
+        throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Khong co quyen tu choi giao vien.');
+    }
+    const teacherId = typeof payload?.teacherId === 'string'
+        ? String(payload.teacherId).trim()
+        : '';
+    if (!teacherId) {
+        throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Thieu teacherId can tu choi.');
+    }
+    const teacherResult = await getPool().query(`
+      SELECT
+        id,
+        username,
+        password_hash,
+        role,
+        status,
+        profile_name,
+        profile_email,
+        profile_birth_year,
+        profile_gender,
+        profile_school,
+        profile_class_name,
+        profile_phone,
+        profile_teacher_type,
+        profile_subject
+      FROM auth_users
+      WHERE id = $1
+      LIMIT 1
+    `, [teacherId]);
+    if (teacherResult.rows.length === 0) {
+        throw new AuthHttpError(404, 'AUTH_SERVER_ERROR', 'Khong tim thay tai khoan giao vien.');
+    }
+    const teacher = mapUserRow(teacherResult.rows[0]);
+    if (teacher.role !== 'teacher') {
+        throw new AuthHttpError(400, 'AUTH_INVALID_ROLE', 'Tai khoan duoc chon khong phai giao vien.');
+    }
+    if (actor.role === 'admin') {
+        const actorSchool = normalizeSchoolName(actor.profile.school || '');
+        const teacherSchool = normalizeSchoolName(teacher.profile.school || '');
+        if (!actorSchool || actorSchool !== teacherSchool) {
+            throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Admin chi duoc tu choi giao vien trong truong cua minh.');
+        }
+    }
+    if (teacher.status !== 'pending') {
+        throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Chi co the tu choi giao vien dang cho duyet.');
+    }
+    await getPool().query(`
+      DELETE FROM auth_users
+      WHERE id = $1
+    `, [teacherId]);
+    try {
+        const sent = await sendTeacherRejectedEmail({
+            email: teacher.profile.email,
+            fullName: teacher.profile.name || teacher.username,
+            adminName: actor.profile.name || actor.username,
+            school: teacher.profile.school || '',
+        });
+        if (!sent) {
+            console.warn(`[auth-teacher-reject] Gmail SMTP chua cau hinh, khong gui email cho ${maskEmailForLog(teacher.profile.email || '')}.`);
+        }
+    }
+    catch (error) {
+        console.error('[auth-teacher-reject] send email failed', error);
+    }
+    return {
+        teacherId,
     };
 };
 export const createAdminAccount = async (token, payload) => {
