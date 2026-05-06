@@ -6016,50 +6016,26 @@ export default function App() {
                       </div>
                     </div>
                     <div className="flex-1 relative">
-                      <div className="w-full aspect-square bg-brand-primary/5 rounded-[3rem] overflow-hidden relative">
+                      <div className="w-full aspect-square bg-brand-primary/5 rounded-[3rem] overflow-hidden relative shadow-2xl border-8 border-white flex items-center justify-center">
                         <img 
-                          src="https://picsum.photos/seed/student/800/800" 
+                          src="/assets/hero.png" 
                           alt="Hero" 
-                          className="w-full h-full object-cover mix-blend-multiply opacity-80"
+                          className="w-full h-full object-contain p-8"
                         />
-                        <div className="absolute inset-0 bg-gradient-to-t from-brand-primary/20 to-transparent"></div>
                       </div>
                       <div className="absolute -bottom-6 -left-6 bg-white p-6 rounded-3xl shadow-xl border border-gray-100 flex items-center gap-4">
                         <div className="w-12 h-12 bg-brand-orange/10 text-brand-orange rounded-2xl flex items-center justify-center">
                           <Heart size={24} />
                         </div>
                         <div>
-                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">CẢM XỨC HÔM NAY</p>
+                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">CẢM XÚC HÔM NAY</p>
                           <p className="text-sm font-bold text-brand-primary">Bạn cảm thấy thế nào?</p>
                         </div>
                       </div>
                     </div>
                   </div>
-
-
                 </div>
               )}
-
-              {/* Psychology News & Concepts Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
-                {[
-                  { title: "Tâm lý học hành vi", desc: "Hiểu về những thói quen và phản ứng tự nhiên.", color: "bg-white", textColor: "text-brand-primary", icon: <Zap /> },
-                  { title: "Trí tuệ cảm xúc (EQ)", desc: "Làm chủ cảm xúc để kết nối sâu sắc hơn.", color: "bg-brand-primary/5", textColor: "text-brand-primary", icon: <Heart /> },
-                  { title: "Cơ chế phòng vệ", desc: "Cách tâm trí tự bảo vệ trước tổn thương.", color: "bg-white", textColor: "text-brand-primary", icon: <Globe /> },
-                  { title: "Khái niệm 'Dòng chảy'", desc: "Trạng thái tập trung tối đa và hạnh phúc.", color: "bg-brand-secondary/10", textColor: "text-gray-700", icon: <MessageCircle /> }
-                ].map((card, idx) => (
-                  <div key={idx} className={cn("p-10 rounded-3xl border border-gray-100 shadow-sm flex flex-col items-center text-center transition-all hover:shadow-xl hover:-translate-y-2 cursor-pointer", card.color)}>
-                    <div className={cn("w-16 h-16 rounded-2xl flex items-center justify-center mb-8", card.textColor, "bg-white shadow-sm")}>
-                      {React.cloneElement(card.icon as any, { size: 32 })}
-                    </div>
-                    <h3 className={cn("text-xl font-bold mb-3", card.textColor)}>{card.title}</h3>
-                    <p className="text-xs text-gray-500 mb-8 leading-relaxed px-4">{card.desc}</p>
-                    <button className={cn("text-[11px] font-black uppercase tracking-[0.2em] flex items-center gap-2", card.textColor)}>
-                      TÌM HIỂU THÊM <ChevronRight size={16} />
-                    </button>
-                  </div>
-                ))}
-              </div>
 
               {/* Psychology Content Grid */}
               <div className="mt-20 grid grid-cols-1 lg:grid-cols-3 gap-12">
@@ -6068,22 +6044,56 @@ export default function App() {
                   <p className="text-white/80 leading-relaxed mb-10 text-lg">
                     Cập nhật những nghiên cứu mới nhất và các khái niệm tâm lý giúp bạn thấu hiểu bản thân và thế giới xung quanh.
                   </p>
-                  <button onClick={() => setCurrentView('handbook')} className="bg-white text-brand-primary px-10 py-4 rounded-2xl font-black text-sm hover:scale-105 transition-all shadow-lg">
+                  <a href="https://memart.vn/tin-tuc/suc-khoe-4/tim-hieu-ve-tam-ly-hoc-duong-la-gi-va-vai-tro-cua-no-vi-cb.html" target="_blank" rel="noopener noreferrer" className="inline-block bg-white text-brand-primary px-10 py-4 rounded-2xl font-black text-sm hover:scale-105 transition-all shadow-lg">
                     XEM KIẾN THỨC
-                  </button>
+                  </a>
+                  <div className="mt-12 -mb-2 overflow-visible">
+                    <img
+                      src="/assets/capybara_reading_paper.png"
+                      alt="Capybara đọc tài liệu tâm lý"
+                      className="w-[112%] md:w-[120%] max-w-none h-auto object-contain mx-[-6%] md:mx-[-10%]"
+                    />
+                  </div>
                 </div>
                 <div className="lg:col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-6">
                   {[
-                    { title: "Hội chứng Imposter", desc: "Tại sao chúng ta thường cảm thấy mình là kẻ giả mạo?" },
-                    { title: "Sức mạnh của sự tổn thương", desc: "Khám phá cách chấp nhận bản thân để trưởng thành." },
-                    { title: "Tâm lý học màu sắc", desc: "Màu sắc ảnh hưởng thế nào đến tâm trạng của bạn?" },
-                    { title: "Kỹ thuật chánh niệm", desc: "Giảm căng thẳng thông qua sự hiện diện thuần túy." }
+                    {
+                      link: 'https://congdankhuyenhoc.vn/bao-luc-hoc-duong-khang-the-tam-ly-co-hoa-giai-duoc-tu-goc-re-179260426092104485.htm',
+                      title: 'Bạo lực học đường: Kháng thể tâm lý có hóa giải được từ gốc rễ?',
+                      desc: 'Khám phá cách xây dựng kháng thể tâm lý để ứng phó với bạo lực học đường.',
+                      image: 'https://congdankhuyenhoc.qltns.mediacdn.vn/zoom/600_315/449484899827462144/2026/4/26/bao-luc-hoc-duong-chuyen-de-1777166795399394408654-242-0-1238-1902-crop-17771668241001509486727.jpg',
+                    },
+                    {
+                      link: 'https://thanhnien.vn/doi-mat-khung-hoang-hoc-duong-giao-vien-co-biet-cach-ung-pho-185260419104421475.htm',
+                      title: 'Đối mặt khủng hoảng học đường, giáo viên có biết cách ứng phó?',
+                      desc: 'Những kỹ năng và biện pháp cần thiết dành cho giáo viên.',
+                      image: 'https://images2.thanhnien.vn/zoom/1200_630/528068263637045248/2026/4/19/avatar1776570267065-17765702675191104234315.jpeg',
+                    },
+                    {
+                      link: 'https://giaoducthoidai.vn/tang-cuong-la-chan-tam-ly-hoc-duong-sau-thien-tai-post775333.html',
+                      title: "Tăng cường 'lá chắn' tâm lý học đường sau thiên tai",
+                      desc: 'Cách bảo vệ và hỗ trợ học sinh vượt qua khủng hoảng.',
+                      image: 'https://cdn.giaoducthoidai.vn/images/e68bd0ae7e0a4d2e84e451c6db68f2d42cd6f45d7fdc6180c18e5fab26afb0cbf8c05f521d99b507670d688b4cdbc5c38c1b93beb816d35b6be7aa7c4b8b8e1e/tamlyhocduongjpg2.jpg.webp',
+                    },
+                    {
+                      link: 'https://thanhnien.vn/tu-van-tam-ly-hoc-duong-nang-hinh-thuc-bo-gd-dt-ra-quy-dinh-moi-185250922172348001.htm',
+                      title: "Tư vấn tâm lý học đường 'nặng hình thức': Bộ GD-ĐT ra quy định mới",
+                      desc: 'Cập nhật những quy định mới nhất từ Bộ GD-ĐT về tư vấn tâm lý.',
+                      image: 'https://images2.thanhnien.vn/zoom/1200_630/528068263637045248/2025/9/22/edit-chon-mon-lop-10-3-17549089375832022375288-78-0-1156-1725-crop-1758536289688678954583.jpeg',
+                    },
                   ].map((item, i) => (
-                    <div key={i} className="bg-white p-8 rounded-3xl border border-gray-100 shadow-sm hover:shadow-md transition-all group">
-                      <h4 className="font-bold text-xl text-brand-primary mb-3 group-hover:translate-x-1 transition-transform">{item.title}</h4>
-                      <div className="h-1.5 w-12 bg-brand-orange rounded-full mb-6"></div>
-                      <p className="text-sm text-gray-500 leading-relaxed">{item.desc}</p>
-                    </div>
+                    <a href={item.link} target="_blank" rel="noopener noreferrer" key={i} className="cursor-pointer bg-white rounded-3xl border border-gray-100 shadow-sm hover:shadow-md transition-all group block overflow-hidden flex flex-col">
+                      <div className="h-48 w-full overflow-hidden">
+                        <img src={item.image} alt={item.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                      </div>
+                      <div className="p-8 flex-1 flex flex-col">
+                        <h4 className="font-bold text-lg text-brand-primary mb-3 group-hover:translate-x-1 transition-transform line-clamp-2">{item.title}</h4>
+                        <div className="mt-auto">
+                          <div className="h-1.5 w-12 bg-brand-orange rounded-full mb-4"></div>
+                          <p className="text-sm text-gray-500 leading-relaxed line-clamp-2">{item.desc}</p>
+                        </div>
+                      </div>
+                    </a>
                   ))}
                 </div>
               </div>
