@@ -6047,11 +6047,11 @@ export default function App() {
                   <a href="https://memart.vn/tin-tuc/suc-khoe-4/tim-hieu-ve-tam-ly-hoc-duong-la-gi-va-vai-tro-cua-no-vi-cb.html" target="_blank" rel="noopener noreferrer" className="inline-block bg-white text-brand-primary px-10 py-4 rounded-2xl font-black text-sm hover:scale-105 transition-all shadow-lg">
                     XEM KIẾN THỨC
                   </a>
-                  <div className="mt-12 -mb-2 overflow-visible">
+                  <div className="mt-14 -mb-2 overflow-visible">
                     <img
                       src="/assets/capybara_reading_paper.png"
                       alt="Capybara đọc tài liệu tâm lý"
-                      className="w-[112%] md:w-[120%] max-w-none h-auto object-contain mx-[-6%] md:mx-[-10%]"
+                      className="w-[157%] md:w-[168%] max-w-none h-auto object-contain mx-[-28%] md:mx-[-34%]"
                     />
                   </div>
                 </div>
