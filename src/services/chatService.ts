@@ -16,20 +16,33 @@ type ChatSendResult = {
   };
 };
 
-const CHAT_SESSION_STORAGE_KEY = 'tram_an_chat_session_id';
+const CHAT_SESSION_STORAGE_KEY_PREFIX = 'tram_an_chat_session_id';
+const DEFAULT_CHAT_OWNER = 'guest';
+
+let activeChatOwner = DEFAULT_CHAT_OWNER;
+
+const normalizeChatOwner = (owner?: string) => {
+  const normalized = String(owner || '').trim().toLowerCase();
+  return normalized || DEFAULT_CHAT_OWNER;
+};
+
+const getSessionStorageKey = (owner?: string) => (
+  `${CHAT_SESSION_STORAGE_KEY_PREFIX}:${normalizeChatOwner(owner)}`
+);
 
 const getSessionId = () => {
   if (typeof window === 'undefined') return '';
-  const existing = window.localStorage.getItem(CHAT_SESSION_STORAGE_KEY);
+  const storageKey = getSessionStorageKey(activeChatOwner);
+  const existing = window.localStorage.getItem(storageKey);
   if (existing) return existing;
   const generated = `chat-${Math.random().toString(36).slice(2, 10)}-${Date.now()}`;
-  window.localStorage.setItem(CHAT_SESSION_STORAGE_KEY, generated);
+  window.localStorage.setItem(storageKey, generated);
   return generated;
 };
 
 const setSessionId = (sessionId: string) => {
   if (typeof window === 'undefined') return;
-  window.localStorage.setItem(CHAT_SESSION_STORAGE_KEY, sessionId);
+  window.localStorage.setItem(getSessionStorageKey(activeChatOwner), sessionId);
 };
 
 const parseChatResponse = (
@@ -42,6 +55,11 @@ const parseChatResponse = (
 };
 
 export const chatService = {
+  setActiveOwner(owner: string, resetSession = false) {
+    activeChatOwner = normalizeChatOwner(owner);
+    if (!resetSession || typeof window === 'undefined') return;
+    window.localStorage.removeItem(getSessionStorageKey(activeChatOwner));
+  },
   async sendMessage(message: string): Promise<ChatSendResult> {
     try {
       const response = await fetch('/api/chat/send', {

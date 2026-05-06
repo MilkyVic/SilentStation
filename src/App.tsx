@@ -1,4 +1,4 @@
-﻿import React, { useState, useMemo, useEffect } from 'react';
+﻿import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { 
   BookOpen, 
   Search, 
@@ -186,6 +186,12 @@ const createChatMessage = (
   ...(sources.length ? { sources } : {}),
   ...(handbookSectionIds.length ? { handbookSectionIds } : {}),
 });
+
+const CHAT_WELCOME_TEXT = 'Chào bạn! Mình là bé Trạm. Bạn cần hỗ trợ gì trong hệ thống Trạm an?';
+
+const buildInitialChatMessages = (): ChatUiMessage[] => ([
+  createChatMessage('assistant', CHAT_WELCOME_TEXT),
+]);
 
 const CORE_TEST_IDS = ['1', '2', '3', '4', '5'];
 const CORE_TEST_ORDER_INDEX = new Map(CORE_TEST_IDS.map((id, index) => [id, index]));
@@ -4629,9 +4635,7 @@ export default function App() {
   const [chatInput, setChatInput] = useState('');
   const [isChatSending, setIsChatSending] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
-  const [chatMessages, setChatMessages] = useState<ChatUiMessage[]>([
-    createChatMessage('assistant', 'Chào bạn! Mình là bé Trạm. Bạn cần hỗ trợ gì trong hệ thống Trạm an?'),
-  ]);
+  const [chatMessages, setChatMessages] = useState<ChatUiMessage[]>(() => buildInitialChatMessages());
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isHandbookHovered, setIsHandbookHovered] = useState(false);
   const [showApprovalModal, setShowApprovalModal] = useState(false);
@@ -5358,6 +5362,20 @@ export default function App() {
 
   const [userData, setUserData] = useState(DEFAULT_USER_DATA);
 
+  const resetChatStateForOwner = useCallback((ownerId: string) => {
+    chatService.setActiveOwner(ownerId, true);
+    setChatMessages(buildInitialChatMessages());
+    setChatInput('');
+    setChatError(null);
+    setIsChatSending(false);
+  }, []);
+
+  const getChatOwnerIdFromAccount = (account: AuthAccount) => {
+    const accountId = String(account.id || '').trim();
+    if (accountId) return accountId;
+    return String(account.username || 'guest').trim().toLowerCase() || 'guest';
+  };
+
   const hasAssignedClass = (className?: string) => Boolean(className?.trim());
 
   const resolveTeacherType = (teacherType?: string, className?: string) => {
@@ -5402,6 +5420,7 @@ export default function App() {
       const sessionAccount = await authService.getCurrentSession();
       if (!sessionAccount || isUnmounted) return;
 
+      resetChatStateForOwner(getChatOwnerIdFromAccount(sessionAccount));
       setIsLoggedIn(true);
       setUserData(buildUserDataFromAccount(sessionAccount));
       setCurrentView(getDefaultViewByRole(sessionAccount.role, sessionAccount.profile.className, sessionAccount.profile.teacherType));
@@ -5637,6 +5656,7 @@ export default function App() {
     setUserData(DEFAULT_USER_DATA);
     setCurrentView('home');
     setFilterSchoolId(null);
+    resetChatStateForOwner('guest');
   };
 
 
@@ -5840,9 +5860,8 @@ export default function App() {
                           <div className="h-px bg-gray-50 my-2 mx-2" />
                           <button 
                             onClick={() => {
-                              setIsLoggedIn(false);
+                              void handleLogout();
                               setIsUserMenuOpen(false);
-                              setCurrentView('home');
                             }}
                             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-red-50 text-gray-600 hover:text-red-500 transition-all text-left"
                           >
@@ -6859,6 +6878,7 @@ export default function App() {
                       setIsLoggedIn(false);
                       setUserData(DEFAULT_USER_DATA);
                       setCurrentView('home');
+                      resetChatStateForOwner('guest');
                       alert('Đã xóa tài khoản thành công.');
                     }
                   }}
@@ -6874,6 +6894,7 @@ export default function App() {
                     setIsLoggedIn(false);
                     setUserData(DEFAULT_USER_DATA);
                     setCurrentView('home');
+                    resetChatStateForOwner('guest');
                     alert('Đã xóa tài khoản thành công.');
                   }
                 }}
@@ -6891,6 +6912,7 @@ export default function App() {
                 setManagedUsersReloadToken((prev) => prev + 1);
               }}
               onLoginSuccess={(account) => {
+                resetChatStateForOwner(getChatOwnerIdFromAccount(account));
                 setIsLoggedIn(true);
                 setUserData(buildUserDataFromAccount(account));
                 setCurrentView(getDefaultViewByRole(account.role, account.profile.className, account.profile.teacherType));
@@ -7437,6 +7459,7 @@ export default function App() {
     </div>
   );
 }
+
 
 
 
