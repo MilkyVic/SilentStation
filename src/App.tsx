@@ -3209,7 +3209,7 @@ const ReportsView = ({
 
 const NotificationBoard = ({ onClose }: { onClose: () => void }) => {
   return (
-    <div className="absolute top-full right-0 mt-4 w-96 bg-white rounded-[2rem] shadow-2xl border border-gray-100 overflow-hidden z-[60]">
+    <div className="absolute top-full right-0 mt-4 w-96 bg-white rounded-[2rem] shadow-2xl border border-gray-100 overflow-hidden z-[220]">
       <div className="p-8 border-b border-gray-50 flex items-center justify-between">
         <h3 className="text-lg font-black text-brand-primary">Bảng thông báo</h3>
         <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
@@ -3338,7 +3338,10 @@ const ManagementLayout = ({
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top Bar */}
-        <header className="h-24 bg-white border-b border-gray-100 flex items-center justify-between px-12 sticky top-0 z-40">
+        <header className={cn(
+          "h-24 bg-white border-b border-gray-100 flex items-center justify-between px-12 sticky top-0",
+          showNotifications ? "z-[210]" : "z-40",
+        )}>
           <div className="flex-1 max-w-xl">
             <div className="relative group">
               <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-brand-primary transition-colors" size={20} />
