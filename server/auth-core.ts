@@ -258,7 +258,7 @@ const seedAccounts = [
         status: 'active',
         profile: {
             name: 'Admin test',
-            email: 'admin_test@tram-an.vn',
+            email: 'admintraman@gmail.com',
             birthYear: '1985',
             gender: 'Nam',
             school: 'THPT Chuyên Hà Nội - Amsterdam',
