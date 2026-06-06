@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { motion } from 'motion/react';
 import HandbookSidebar from './HandbookSidebar';
 import HandbookContent from './HandbookContent';
@@ -22,6 +22,10 @@ type HandbookViewProps = {
   setActiveSectionId: (next: string) => void;
   activeSection: HandbookSectionLite;
   iconMap: Record<string, React.ReactNode>;
+  isLoggedIn: boolean;
+  userRole?: string;
+  onNavigateToTestList: () => void;
+  onNavigateToAuth: () => void;
 };
 
 export default function HandbookView({
@@ -35,7 +39,28 @@ export default function HandbookView({
   setActiveSectionId,
   activeSection,
   iconMap,
+  isLoggedIn,
+  userRole,
+  onNavigateToTestList,
+  onNavigateToAuth,
 }: HandbookViewProps) {
+  useEffect(() => {
+    if (filteredSections.length === 0) return;
+    if (!filteredSections.some((section) => section.id === activeSectionId)) {
+      setActiveSectionId(filteredSections[0].id);
+    }
+  }, [activeSectionId, filteredSections, setActiveSectionId]);
+
+  const handleSelectSection = (id: string) => {
+    setActiveSectionId(id);
+    window.requestAnimationFrame(() => {
+      document.getElementById(`handbook-section-${id}`)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    });
+  };
+
   return (
     <motion.div
       key="handbook"
@@ -51,7 +76,7 @@ export default function HandbookView({
         categories={categories}
         filteredSections={filteredSections}
         activeSectionId={activeSectionId}
-        onSelectSection={setActiveSectionId}
+        onSelectSection={handleSelectSection}
         iconMap={iconMap}
       />
 
@@ -60,6 +85,13 @@ export default function HandbookView({
         onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
         onOpenSidebar={() => setIsSidebarOpen(true)}
         activeSection={activeSection}
+        sections={filteredSections}
+        activeSectionId={activeSectionId}
+        onActiveSectionChange={setActiveSectionId}
+        isLoggedIn={isLoggedIn}
+        userRole={userRole}
+        onNavigateToTestList={onNavigateToTestList}
+        onNavigateToAuth={onNavigateToAuth}
       />
     </motion.div>
   );

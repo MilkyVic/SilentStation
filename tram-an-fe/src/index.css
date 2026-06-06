@@ -1,0 +1,24 @@
+@import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800;900&family=Outfit:wght@400;500;600;700;800;900&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Be Vietnam Pro", "Noto Sans", Arial, ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Be Vietnam Pro", "Noto Sans", Arial, sans-serif;
+  --font-serif: "Playfair Display", serif;
+  
+  --color-pastel-blue: #E0F2FE;
+  --color-pastel-teal: #F0FDFA;
+  --color-brand-primary: #18A5A7;
+  --color-brand-secondary: #B6C0C5;
+  --color-brand-orange: #F15A24;
+}
+
+@layer base {
+  body {
+    @apply bg-white text-[#1A1A1A] font-sans;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display;
+  }
+}
