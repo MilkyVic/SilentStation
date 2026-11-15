@@ -1,3 +1,4 @@
+import {browserLogin} from '../../server/http-security.js';
 import { loginAccount } from '../../server/auth-core.js';
 import { ensureMethod, handleApiError, readJsonBody } from '../_lib/handler.js';
 
@@ -6,7 +7,8 @@ export default async function handler(req: any, res: any) {
 
   try {
     const result = await loginAccount(readJsonBody(req));
-    res.status(200).json({ ok: true, ...result });
+    req.body=readJsonBody(req);
+    res.status(200).json({ ok: true, ...browserLogin(req,res,result) });
   } catch (error) {
     handleApiError(res, error);
   }

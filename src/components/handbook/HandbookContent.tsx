@@ -117,16 +117,11 @@ export default function HandbookContent({
     <div className="flex-1 flex flex-col min-w-0 bg-white">
       <div className="h-14 border-b border-gray-100 flex items-center px-8">
         <button
+          aria-label={isSidebarOpen?'Đóng mục lục':'Mở mục lục'}
           onClick={onToggleSidebar}
           className="p-2 hover:bg-gray-50 rounded-xl mr-6 transition-colors"
         >
           {isSidebarOpen ? <X size={20} /> : <Menu size={20} />}
-        </button>
-        <button
-          onClick={onOpenSidebar}
-          className="md:hidden p-2 hover:bg-gray-50 rounded-xl mr-2 transition-colors"
-        >
-          <ArrowRight size={20} className="rotate-180" />
         </button>
         <div className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em] flex items-center gap-3">
           <span>{activeSection.category}</span>

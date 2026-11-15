@@ -1,0 +1,3 @@
+import { database } from '../database.js';
+// Run explicitly, never from a public read/health request. Real-response deletion requires approved retention metadata.
+export async function expireDrafts() { await database().query("DELETE FROM runtime_rate_limits WHERE window_started<NOW()-INTERVAL '1 day'"); await database().query("DELETE FROM survey_rate_limits WHERE minute<NOW()-INTERVAL '1 day'"); await database().query("UPDATE survey_sessions SET answers='{}'::jsonb,reviewed_sections='[]'::jsonb WHERE expires_at<=NOW() AND (answers<>'{}'::jsonb OR reviewed_sections<>'[]'::jsonb)"); await database().query("UPDATE legacy_test_drafts SET answers='{}'::jsonb WHERE expires_at<=NOW() AND answers<>'{}'::jsonb"); }

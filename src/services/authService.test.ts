@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, test } from 'node:test';
 import { authService } from './authService';
+import { TEST_AUTH_ACCOUNTS } from './__fixtures__/authAccounts';
 
 const buildRegisterPayload = (username: string) => ({
   username,
@@ -19,7 +20,7 @@ const buildRegisterPayload = (username: string) => ({
 
 describe('authService', () => {
   beforeEach(() => {
-    authService.__resetForTests();
+    authService.__resetForTests(TEST_AUTH_ACCOUNTS);
   });
 
   test('logs in with seeded account and restores session', async () => {

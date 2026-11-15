@@ -1,7 +1,9 @@
-﻿// @ts-nocheck
+// @ts-nocheck
 import crypto from 'node:crypto';
 import { Pool } from 'pg';
 import nodemailer from 'nodemailer';
+import { databaseConfig, validateSessionSecret, validateRuntime, smtpConfig, secretValue } from './runtime-config.js';
+import { consumeRate, passwordAttempt } from './rate-limits.js';
 export class AuthHttpError extends Error {
     statusCode;
     code;
@@ -13,11 +15,8 @@ export class AuthHttpError extends Error {
 }
 const normalizeUsername = (value) => value.trim().toLowerCase();
 const DATABASE_URL = process.env.DATABASE_URL;
-const AUTH_SESSION_SECRET = process.env.AUTH_SESSION_SECRET || 'dev-only-change-me';
+const AUTH_SESSION_SECRET = validateSessionSecret();
 const ACCESS_TOKEN_TTL_SECONDS = Number(process.env.AUTH_ACCESS_TOKEN_TTL_SECONDS || 60 * 60 * 8);
-const AUTH_SEED_TEST_USERS = process.env.AUTH_SEED_TEST_USERS
-    ? process.env.AUTH_SEED_TEST_USERS === 'true'
-    : process.env.NODE_ENV !== 'production';
 const JOIN_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const DEFAULT_JOIN_CODE_TTL_MINUTES = Number(process.env.AUTH_JOIN_CODE_TTL_MINUTES || 10);
 const DEFAULT_JOIN_CODE_MAX_USES = Number(process.env.AUTH_JOIN_CODE_MAX_USES || 60);
@@ -28,18 +27,18 @@ const JOIN_CODE_GENERATE_ATTEMPTS = 12;
 const AUTH_REGISTER_OTP_TTL_SECONDS = Number(process.env.AUTH_REGISTER_OTP_TTL_SECONDS || 300);
 const AUTH_REGISTER_OTP_MAX_ATTEMPTS = Number(process.env.AUTH_REGISTER_OTP_MAX_ATTEMPTS || 5);
 const AUTH_REGISTER_OTP_RESEND_COOLDOWN_SECONDS = Number(process.env.AUTH_REGISTER_OTP_RESEND_COOLDOWN_SECONDS || 30);
-const AUTH_REGISTER_OTP_EXPOSE_DEV_CODE = process.env.AUTH_REGISTER_OTP_EXPOSE_DEV_CODE
+const AUTH_REGISTER_OTP_EXPOSE_DEV_CODE = process.env.NODE_ENV !== 'production' && (process.env.AUTH_REGISTER_OTP_EXPOSE_DEV_CODE
     ? process.env.AUTH_REGISTER_OTP_EXPOSE_DEV_CODE === 'true'
-    : process.env.NODE_ENV !== 'production';
+    : true);
 const AUTH_GMAIL_SMTP_USER = (process.env.AUTH_GMAIL_SMTP_USER || '').trim();
 const AUTH_GMAIL_SMTP_APP_PASSWORD = (process.env.AUTH_GMAIL_SMTP_APP_PASSWORD || '').trim();
 const AUTH_EMAIL_FROM = (process.env.AUTH_EMAIL_FROM || AUTH_GMAIL_SMTP_USER || 'no-reply@tram-an.vn').trim();
 const AUTH_ADMIN_LOGIN_OTP_TTL_SECONDS = Number(process.env.AUTH_ADMIN_LOGIN_OTP_TTL_SECONDS || 300);
 const AUTH_ADMIN_LOGIN_OTP_MAX_ATTEMPTS = Number(process.env.AUTH_ADMIN_LOGIN_OTP_MAX_ATTEMPTS || 5);
 const AUTH_ADMIN_LOGIN_OTP_RESEND_COOLDOWN_SECONDS = Number(process.env.AUTH_ADMIN_LOGIN_OTP_RESEND_COOLDOWN_SECONDS || 30);
-const AUTH_ADMIN_LOGIN_OTP_EXPOSE_DEV_CODE = process.env.AUTH_ADMIN_LOGIN_OTP_EXPOSE_DEV_CODE
+const AUTH_ADMIN_LOGIN_OTP_EXPOSE_DEV_CODE = process.env.NODE_ENV !== 'production' && (process.env.AUTH_ADMIN_LOGIN_OTP_EXPOSE_DEV_CODE
     ? process.env.AUTH_ADMIN_LOGIN_OTP_EXPOSE_DEV_CODE === 'true'
-    : process.env.NODE_ENV !== 'production';
+    : true);
 const CANONICAL_SCHOOL_NAMES = {
     chuyenHaNoiAmsterdam: 'THPT Chuyên Hà Nội - Amsterdam',
     chuVanAn: 'THPT Chu Văn An',
@@ -67,226 +66,7 @@ const normalizeSchoolName = (value) => {
         return '';
     return SCHOOL_NAME_ALIASES.get(toSchoolLookupKey(school)) || school;
 };
-const getPool = () => {
-    if (process.env.NODE_ENV === 'production' && AUTH_SESSION_SECRET === 'dev-only-change-me') {
-        throw new AuthHttpError(500, 'AUTH_SERVER_ERROR', 'Thieu bien moi truong AUTH_SESSION_SECRET.');
-    }
-    if (!DATABASE_URL) {
-        throw new AuthHttpError(500, 'AUTH_SERVER_ERROR', 'Thieu bien moi truong DATABASE_URL.');
-    }
-    if (pool)
-        return pool;
-    pool = new Pool({
-        connectionString: DATABASE_URL,
-        ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-    });
-    return pool;
-};
-const authSchemaSql = `
-CREATE TABLE IF NOT EXISTS auth_users (
-  id TEXT PRIMARY KEY,
-  username TEXT NOT NULL UNIQUE,
-  password_hash TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('student', 'teacher', 'admin', 'superadmin')),
-  status TEXT NOT NULL CHECK (status IN ('active', 'pending', 'suspended')),
-  profile_name TEXT NOT NULL DEFAULT '',
-  profile_email TEXT NOT NULL DEFAULT '',
-  profile_birth_year TEXT NOT NULL DEFAULT '',
-  profile_gender TEXT NOT NULL DEFAULT '',
-  profile_school TEXT NOT NULL DEFAULT '',
-  profile_class_name TEXT NOT NULL DEFAULT '',
-  profile_phone TEXT NOT NULL DEFAULT '',
-  profile_teacher_type TEXT NOT NULL DEFAULT '' CHECK (profile_teacher_type IN ('', 'homeroom', 'subject')),
-  profile_subject TEXT NOT NULL DEFAULT '',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-ALTER TABLE auth_users
-  ADD COLUMN IF NOT EXISTS profile_teacher_type TEXT NOT NULL DEFAULT '' CHECK (profile_teacher_type IN ('', 'homeroom', 'subject'));
-
-ALTER TABLE auth_users
-  ADD COLUMN IF NOT EXISTS profile_subject TEXT NOT NULL DEFAULT '';
-
-ALTER TABLE auth_users
-  ADD COLUMN IF NOT EXISTS profile_phone TEXT NOT NULL DEFAULT '';
-
-CREATE INDEX IF NOT EXISTS idx_auth_users_username ON auth_users (username);
-
-CREATE TABLE IF NOT EXISTS auth_sessions (
-  jti TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
-  exp_at TIMESTAMPTZ NOT NULL,
-  revoked_at TIMESTAMPTZ NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id ON auth_sessions (user_id);
-CREATE INDEX IF NOT EXISTS idx_auth_sessions_exp_at ON auth_sessions (exp_at);
-
-CREATE TABLE IF NOT EXISTS class_join_codes (
-  id TEXT PRIMARY KEY,
-  teacher_id TEXT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
-  school TEXT NOT NULL DEFAULT '',
-  class_name TEXT NOT NULL DEFAULT '',
-  code_hash TEXT NOT NULL UNIQUE,
-  expires_at TIMESTAMPTZ NOT NULL,
-  max_uses INTEGER NOT NULL DEFAULT 60 CHECK (max_uses > 0),
-  used_count INTEGER NOT NULL DEFAULT 0 CHECK (used_count >= 0),
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'revoked', 'expired')),
-  revoked_at TIMESTAMPTZ NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_class_join_codes_teacher ON class_join_codes (teacher_id);
-CREATE INDEX IF NOT EXISTS idx_class_join_codes_status_expires ON class_join_codes (status, expires_at);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_class_join_codes_active_teacher_class
-  ON class_join_codes (teacher_id, class_name)
-  WHERE status = 'active';
-
-CREATE TABLE IF NOT EXISTS class_join_code_events (
-  id TEXT PRIMARY KEY,
-  event_type TEXT NOT NULL CHECK (event_type IN ('created', 'revoked', 'redeem_success', 'redeem_failed')) ,
-  actor_user_id TEXT NULL REFERENCES auth_users(id) ON DELETE SET NULL,
-  teacher_id TEXT NULL REFERENCES auth_users(id) ON DELETE SET NULL,
-  class_join_code_id TEXT NULL REFERENCES class_join_codes(id) ON DELETE SET NULL,
-  class_name TEXT NOT NULL DEFAULT '',
-  school TEXT NOT NULL DEFAULT '',
-  student_username TEXT NOT NULL DEFAULT '',
-  note TEXT NOT NULL DEFAULT '',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_class_join_code_events_created_at ON class_join_code_events (created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_class_join_code_events_teacher ON class_join_code_events (teacher_id);
-
-CREATE TABLE IF NOT EXISTS auth_register_otps (
-  id TEXT PRIMARY KEY,
-  purpose TEXT NOT NULL CHECK (purpose IN ('register_student', 'register_teacher')),
-  username TEXT NOT NULL,
-  email TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('student', 'teacher')),
-  request_fingerprint TEXT NOT NULL,
-  otp_hash TEXT NOT NULL,
-  expires_at TIMESTAMPTZ NOT NULL,
-  resend_available_at TIMESTAMPTZ NOT NULL,
-  attempts_left INTEGER NOT NULL DEFAULT 5 CHECK (attempts_left >= 0),
-  consumed_at TIMESTAMPTZ NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_auth_register_otps_lookup ON auth_register_otps (username, role, consumed_at, expires_at DESC);
-
-CREATE TABLE IF NOT EXISTS auth_admin_login_otps (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
-  username TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('admin', 'superadmin')),
-  phone TEXT NOT NULL,
-  otp_hash TEXT NOT NULL,
-  expires_at TIMESTAMPTZ NOT NULL,
-  resend_available_at TIMESTAMPTZ NOT NULL,
-  attempts_left INTEGER NOT NULL DEFAULT 5 CHECK (attempts_left >= 0),
-  consumed_at TIMESTAMPTZ NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_auth_admin_login_otps_lookup ON auth_admin_login_otps (user_id, consumed_at, expires_at DESC);
-`;
-const seedAccounts = [
-    {
-        id: 'acc-student-1',
-        username: 'student_test',
-        password: '123456',
-        role: 'student',
-        status: 'active',
-        profile: {
-            name: 'Hoc sinh test',
-            email: 'student_test@tram-an.vn',
-            birthYear: '2008',
-            gender: 'Nu',
-            school: 'THPT Chuyên Hà Nội - Amsterdam',
-            className: '12A1',
-            teacherType: '',
-            subject: '',
-        },
-    },
-    {
-        id: 'acc-teacher-1',
-        username: 'teacher_test',
-        password: '123456',
-        role: 'teacher',
-        status: 'active',
-        profile: {
-            name: 'Giao vien test',
-            email: 'teacher_test@tram-an.vn',
-            birthYear: '1988',
-            gender: 'Nam',
-            school: 'THPT Chuyên Hà Nội - Amsterdam',
-            className: '12A1',
-            phone: '',
-            teacherType: 'homeroom',
-            subject: '',
-        },
-    },
-    {
-        id: 'acc-teacher-subject-1',
-        username: 'teacher_subject_test',
-        password: '123456',
-        role: 'teacher',
-        status: 'active',
-        profile: {
-            name: 'Giao vien bo mon test',
-            email: 'teacher_subject_test@tram-an.vn',
-            birthYear: '1989',
-            gender: 'Nu',
-            school: 'THPT Chuyên Hà Nội - Amsterdam',
-            className: '',
-            phone: '',
-            teacherType: 'subject',
-            subject: 'toan',
-        },
-    },
-    {
-        id: 'acc-admin-1',
-        username: 'admin_test',
-        password: '123456',
-        role: 'admin',
-        status: 'active',
-        profile: {
-            name: 'Admin test',
-            email: 'admintraman@gmail.com',
-            birthYear: '1985',
-            gender: 'Nam',
-            school: 'THPT Chuyên Hà Nội - Amsterdam',
-            className: '',
-            phone: '0909000001',
-            teacherType: '',
-            subject: '',
-        },
-    },
-    {
-        id: 'acc-superadmin-1',
-        username: 'superadmin',
-        password: '123456',
-        role: 'superadmin',
-        status: 'active',
-        profile: {
-            name: 'Superadmin',
-            email: 'hello.traman@gmail.com',
-            birthYear: '1983',
-            gender: 'Nu',
-            school: '',
-            className: '',
-            phone: '0909000002',
-            teacherType: '',
-            subject: '',
-        },
-    },
-];
+const getPool = () => { validateRuntime(); return pool ??= new Pool(databaseConfig()); };
 const hashPassword = (password, salt) => {
     const passwordSalt = salt || crypto.randomBytes(16).toString('hex');
     const digest = crypto.scryptSync(password, passwordSalt, 64).toString('hex');
@@ -308,7 +88,7 @@ const hashJoinCode = (code) => crypto
     .createHmac('sha256', AUTH_SESSION_SECRET)
     .update(normalizeJoinCode(code))
     .digest('hex');
-const createJoinCode = () => Array.from({ length: JOIN_CODE_LENGTH }, () => JOIN_CODE_ALPHABET[Math.floor(Math.random() * JOIN_CODE_ALPHABET.length)]).join('');
+const createJoinCode = () => Array.from({ length: JOIN_CODE_LENGTH }, () => JOIN_CODE_ALPHABET[crypto.randomInt(JOIN_CODE_ALPHABET.length)]).join('');
 const sanitizeTtlMinutes = (ttlMinutes) => {
     const value = Number(ttlMinutes ?? DEFAULT_JOIN_CODE_TTL_MINUTES);
     if (!Number.isFinite(value) || value <= 0)
@@ -322,7 +102,7 @@ const sanitizeMaxUses = (maxUses) => {
     return Math.min(Math.floor(value), MAX_JOIN_CODE_USES);
 };
 const normalizeEmail = (value) => (typeof value === 'string' ? value.trim().toLowerCase() : '');
-const createRegisterOtpCode = () => String(Math.floor(100000 + Math.random() * 900000));
+const createRegisterOtpCode = () => String(crypto.randomInt(100000, 1000000));
 const hashRegisterOtp = (sessionId, otpCode) => crypto
     .createHmac('sha256', AUTH_SESSION_SECRET)
     .update(`${sessionId}:${otpCode}`)
@@ -344,18 +124,9 @@ const maskEmailForLog = (email) => {
 };
 let registerOtpMailer = null;
 const getRegisterOtpMailer = () => {
-    if (!AUTH_GMAIL_SMTP_USER || !AUTH_GMAIL_SMTP_APP_PASSWORD)
-        return null;
-    if (registerOtpMailer)
-        return registerOtpMailer;
-    registerOtpMailer = nodemailer.createTransport({
-        service: 'gmail',
-        auth: {
-            user: AUTH_GMAIL_SMTP_USER,
-            pass: AUTH_GMAIL_SMTP_APP_PASSWORD,
-        },
-    });
-    return registerOtpMailer;
+    if (registerOtpMailer) return registerOtpMailer;
+    const config = smtpConfig();
+    return config ? registerOtpMailer = nodemailer.createTransport(config) : null;
 };
 const sendRegisterOtpEmail = async ({ email, otpCode, purpose, fullName }) => {
     const mailer = getRegisterOtpMailer();
@@ -450,7 +221,7 @@ const maskPhoneForLog = (phone) => {
         return normalized || '***';
     return `${'*'.repeat(Math.max(normalized.length - 4, 2))}${normalized.slice(-4)}`;
 };
-const createAdminLoginOtpCode = () => String(Math.floor(100000 + Math.random() * 900000));
+const createAdminLoginOtpCode = () => String(crypto.randomInt(100000, 1000000));
 const hashAdminLoginOtp = (sessionId, otpCode) => crypto
     .createHmac('sha256', AUTH_SESSION_SECRET)
     .update(`${sessionId}:${otpCode}`)
@@ -503,7 +274,8 @@ const issueAdminLoginOtp = async (account) => {
             throw new AuthHttpError(429, 'AUTH_OTP_RATE_LIMIT', `Vui long cho ${waitSeconds}s de gui lai OTP.`);
         }
     }
-    const otpSessionId = `aotp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await consumeRate('otp', adminEmail);
+    const otpSessionId = `aotp-${crypto.randomUUID()}`;
     const otpCode = createAdminLoginOtpCode();
     const otpHash = hashAdminLoginOtp(otpSessionId, otpCode);
     const expiresAt = new Date(Date.now() + AUTH_ADMIN_LOGIN_OTP_TTL_SECONDS * 1000);
@@ -533,19 +305,19 @@ const issueAdminLoginOtp = async (account) => {
             fullName: account.profile.name || account.username,
             role: account.role,
         });
-        delivery = sent ? 'gmail' : 'dev_console';
+        delivery = sent ? (process.env.AUTH_SMTP_HOST ? 'smtp' : 'gmail') : 'dev_console';
         if (!sent && process.env.NODE_ENV === 'production') {
             throw new AuthHttpError(500, 'AUTH_SERVER_ERROR', 'OTP email chua duoc cau hinh Gmail SMTP.');
         }
     }
     catch (error) {
-        console.error('[auth-admin-otp] send email failed', error);
+        console.error('[auth-admin-otp] send email failed');
         if (process.env.NODE_ENV === 'production') {
             throw new AuthHttpError(500, 'AUTH_SERVER_ERROR', 'Khong the gui OTP qua email.');
         }
     }
     if (delivery === 'dev_console') {
-        console.log(`[auth-admin-otp] OTP ${otpCode} for ${account.username} -> ${maskEmailForLog(adminEmail)}`);
+        console.info('[auth-otp] development delivery available only in explicit dev response.');
     }
     return {
         otpRequired: true,
@@ -556,61 +328,37 @@ const issueAdminLoginOtp = async (account) => {
         ...(AUTH_ADMIN_LOGIN_OTP_EXPOSE_DEV_CODE ? { devOtpCode: otpCode } : {}),
     };
 };
+
+const verifyOtpAtomic = async (table, sessionId, otpCode, hashFn, validateSession = null) => {
+    const client = await getPool().connect();
+    let committed = false;
+    try {
+        await client.query('BEGIN');
+        const result = await client.query(`SELECT * FROM ${table} WHERE id=$1 FOR UPDATE`, [sessionId]);
+        const row = result.rows[0];
+        if (!row || row.consumed_at || Number(row.attempts_left) <= 0) throw new AuthHttpError(400, 'AUTH_OTP_INVALID', 'OTP không tồn tại, đã dùng hoặc đã hết lượt thử.');
+        if (new Date(row.expires_at).getTime() <= Date.now()) throw new AuthHttpError(400, 'AUTH_OTP_EXPIRED', 'OTP đã hết hạn.');
+        if (validateSession) validateSession(row);
+        const incoming = Buffer.from(hashFn(sessionId, otpCode), 'hex');
+        const expected = Buffer.from(row.otp_hash, 'hex');
+        if (incoming.length !== expected.length || !crypto.timingSafeEqual(incoming, expected)) {
+            await client.query(`UPDATE ${table} SET attempts_left=GREATEST(attempts_left-1,0),updated_at=NOW() WHERE id=$1`, [sessionId]);
+            await client.query('COMMIT'); committed = true;
+            throw new AuthHttpError(400, 'AUTH_OTP_INVALID', 'OTP không hợp lệ.');
+        }
+        await client.query(`UPDATE ${table} SET consumed_at=NOW(),updated_at=NOW() WHERE id=$1`, [sessionId]);
+        await client.query('COMMIT'); committed = true;
+        return row;
+    } catch (error) { if (!committed) await client.query('ROLLBACK'); throw error; }
+    finally { client.release(); }
+};
 const verifyAdminLoginOtpAndCreateSession = async (payload) => {
     const otpSessionId = typeof payload.otpSessionId === 'string' ? payload.otpSessionId.trim() : '';
     const otpCode = typeof payload.otpCode === 'string' ? payload.otpCode.trim() : '';
-    if (!otpSessionId || !otpCode) {
-        throw new AuthHttpError(400, 'AUTH_OTP_REQUIRED', 'Vui long nhap OTP dang nhap.');
-    }
-    const sessionResult = await getPool().query(`
-      SELECT
-        id,
-        user_id,
-        username,
-        role,
-        phone,
-        otp_hash,
-        expires_at,
-        attempts_left,
-        consumed_at
-      FROM auth_admin_login_otps
-      WHERE id = $1
-      LIMIT 1
-    `, [otpSessionId]);
-    if (sessionResult.rows.length === 0) {
-        throw new AuthHttpError(400, 'AUTH_OTP_INVALID', 'Phien OTP dang nhap khong ton tai.');
-    }
-    const otpSession = sessionResult.rows[0];
-    if (otpSession.consumed_at) {
-        throw new AuthHttpError(400, 'AUTH_OTP_INVALID', 'Ma OTP da duoc su dung.');
-    }
-    if (new Date(otpSession.expires_at).getTime() <= Date.now()) {
-        throw new AuthHttpError(400, 'AUTH_OTP_EXPIRED', 'Ma OTP da het han.');
-    }
-    const incomingHash = hashAdminLoginOtp(otpSessionId, otpCode);
-    if (incomingHash !== otpSession.otp_hash) {
-        const attemptsLeft = Math.max(Number(otpSession.attempts_left || 0) - 1, 0);
-        await getPool().query(`
-          UPDATE auth_admin_login_otps
-          SET attempts_left = $2, updated_at = NOW()
-          WHERE id = $1
-        `, [otpSessionId, attemptsLeft]);
-        throw new AuthHttpError(400, 'AUTH_OTP_INVALID', attemptsLeft <= 0
-            ? 'Ma OTP sai qua so lan cho phep. Vui long yeu cau ma moi.'
-            : 'Ma OTP khong chinh xac.');
-    }
-    const account = await findAccountById(otpSession.user_id);
-    if (!account || !shouldUseAdminOtp(account.role)) {
-        throw new AuthHttpError(400, 'AUTH_INVALID_ROLE', 'Phien OTP khong dung vai tro quan tri.');
-    }
-    if (account.status !== 'active') {
-        throw new AuthHttpError(403, 'AUTH_PENDING_APPROVAL', 'Tai khoan chua duoc kich hoat.');
-    }
-    await getPool().query(`
-      UPDATE auth_admin_login_otps
-      SET consumed_at = NOW(), updated_at = NOW()
-      WHERE id = $1
-    `, [otpSessionId]);
+    if (!otpSessionId || !otpCode) throw new AuthHttpError(400,'AUTH_OTP_REQUIRED','Vui lòng nhập OTP.');
+    const row = await verifyOtpAtomic('auth_admin_login_otps',otpSessionId,otpCode,hashAdminLoginOtp);
+    const account = await findAccountById(row.user_id);
+    if (!account || !shouldUseAdminOtp(account.role) || account.status !== 'active') throw new AuthHttpError(403,'AUTH_INVALID_ROLE','Tài khoản không còn đủ quyền.');
     return createLoginSessionResult(account);
 };
 const encodeBase64Url = (value) => Buffer.from(value).toString('base64url');
@@ -896,107 +644,14 @@ const cleanupExpiredJoinCodes = async () => {
 };
 let initializedPromise = null;
 export const initializeAuthCore = async () => {
-    if (initializedPromise)
-        return initializedPromise;
-    initializedPromise = (async () => {
-        await getPool().query(authSchemaSql);
-        await getPool().query(
-                    `
-          UPDATE auth_users
-          SET profile_school = $1, updated_at = NOW()
-          WHERE LOWER(profile_school) IN (
-            'thpt chuyen ha noi - amsterdam',
-            'thpt chuyen ha noi amsterdam'
-          )
-        `, [CANONICAL_SCHOOL_NAMES.chuyenHaNoiAmsterdam]);
-        await getPool().query(
-          `
-          UPDATE class_join_codes
-          SET school = $1, updated_at = NOW()
-          WHERE LOWER(school) IN (
-            'thpt chuyen ha noi - amsterdam',
-            'thpt chuyen ha noi amsterdam'
-          )
-        `, [CANONICAL_SCHOOL_NAMES.chuyenHaNoiAmsterdam]);
-        await getPool().query(
-          `
-          UPDATE class_join_code_events
-          SET school = $1
-          WHERE LOWER(school) IN (
-            'thpt chuyen ha noi - amsterdam',
-            'thpt chuyen ha noi amsterdam'
-          )
-        `, [CANONICAL_SCHOOL_NAMES.chuyenHaNoiAmsterdam]);
-        if (!AUTH_SEED_TEST_USERS)
-            return;
-        for (const seed of seedAccounts) {
-            await getPool().query(`
-          INSERT INTO auth_users (
-            id,
-            username,
-            password_hash,
-            role,
-            status,
-            profile_name,
-            profile_email,
-            profile_birth_year,
-            profile_gender,
-            profile_school,
-            profile_class_name,
-            profile_phone,
-            profile_teacher_type,
-            profile_subject
-          ) VALUES (
-            $1, $2, $3, $4, $5,
-            $6, $7, $8, $9, $10, $11, $12, $13, $14
-          )
-          ON CONFLICT (id)
-          DO UPDATE SET
-            username = EXCLUDED.username,
-            password_hash = EXCLUDED.password_hash,
-            role = EXCLUDED.role,
-            status = EXCLUDED.status,
-            profile_name = EXCLUDED.profile_name,
-            profile_email = EXCLUDED.profile_email,
-            profile_birth_year = EXCLUDED.profile_birth_year,
-            profile_gender = EXCLUDED.profile_gender,
-            profile_school = EXCLUDED.profile_school,
-            profile_class_name = EXCLUDED.profile_class_name,
-            profile_phone = EXCLUDED.profile_phone,
-            profile_teacher_type = EXCLUDED.profile_teacher_type,
-            profile_subject = EXCLUDED.profile_subject,
-            updated_at = NOW()
-        `, [
-                seed.id,
-                normalizeUsername(seed.username),
-                hashPassword(seed.password),
-                seed.role,
-                seed.status,
-                seed.profile.name,
-                seed.profile.email,
-                seed.profile.birthYear,
-                seed.profile.gender,
-                seed.profile.school,
-                seed.profile.className,
-                seed.profile.phone || '',
-                seed.profile.teacherType || '',
-                seed.profile.subject || '',
-            ]);
-        }
-    })().catch((error) => {
+    if (!initializedPromise) initializedPromise = getPool().query('SELECT 1 FROM auth_users LIMIT 0').catch(() => {
         initializedPromise = null;
-        if (error instanceof AuthHttpError) {
-            throw error;
-        }
-        console.error('[auth-core] init failed', error);
-        throw new AuthHttpError(500, 'AUTH_SERVER_ERROR', 'Khong the ket noi PostgreSQL. Kiem tra DATABASE_URL va network.');
+        throw new AuthHttpError(500, 'AUTH_SERVER_ERROR', 'Database chưa sẵn sàng. Chạy migration rõ ràng trên DB development riêng.');
     });
     return initializedPromise;
 };
 export const healthCheck = async () => {
     await initializeAuthCore();
-    await cleanupExpiredSessions();
-    await cleanupExpiredJoinCodes();
     await getPool().query('SELECT 1');
     return { ok: true, service: 'auth-api' };
 };
@@ -1046,65 +701,13 @@ const validateRegisterInputForOtp = (payload) => {
         normalizedSubject,
     };
 };
-const consumeRegisterOtpOrThrow = async ({ payload, normalizedUsername, role, normalizedEmail }) => {
-    const otpSessionId = typeof payload.otpSessionId === 'string' ? payload.otpSessionId.trim() : '';
-    const otpCode = typeof payload.otpCode === 'string' ? payload.otpCode.trim() : '';
-    if (!otpSessionId || !otpCode) {
-        throw new AuthHttpError(400, 'AUTH_OTP_REQUIRED', 'Vui long nhap OTP dang ky.');
-    }
-    const sessionResult = await getPool().query(`
-      SELECT
-        id,
-        username,
-        email,
-        role,
-        request_fingerprint,
-        otp_hash,
-        expires_at,
-        attempts_left,
-        consumed_at
-      FROM auth_register_otps
-      WHERE id = $1
-      LIMIT 1
-    `, [otpSessionId]);
-    if (sessionResult.rows.length === 0) {
-        throw new AuthHttpError(400, 'AUTH_OTP_INVALID', 'Phien OTP dang ky khong ton tai.');
-    }
-    const session = sessionResult.rows[0];
-    if (session.consumed_at) {
-        throw new AuthHttpError(400, 'AUTH_OTP_INVALID', 'Ma OTP da duoc su dung.');
-    }
-    if (new Date(session.expires_at).getTime() <= Date.now()) {
-        throw new AuthHttpError(400, 'AUTH_OTP_EXPIRED', 'Ma OTP da het han.');
-    }
-    if (session.username !== normalizedUsername || session.role !== role || session.email !== normalizedEmail) {
-        throw new AuthHttpError(400, 'AUTH_OTP_INVALID', 'Thong tin dang ky khong khop voi phien OTP.');
-    }
-    const expectedFingerprint = buildRegisterOtpFingerprint({
-        username: normalizedUsername,
-        role,
-        profile: { email: normalizedEmail },
+const consumeRegisterOtpOrThrow = async ({payload,normalizedUsername,role,normalizedEmail}) => {
+    const sessionId = typeof payload.otpSessionId === 'string' ? payload.otpSessionId.trim() : '';
+    const code = typeof payload.otpCode === 'string' ? payload.otpCode.trim() : '';
+    if (!sessionId || !code) throw new AuthHttpError(400,'AUTH_OTP_REQUIRED','Vui lòng nhập OTP.');
+    await verifyOtpAtomic('auth_register_otps',sessionId,code,hashRegisterOtp,row => {
+        if (row.username !== normalizedUsername || row.role !== role || row.email !== normalizedEmail) throw new AuthHttpError(400,'AUTH_OTP_INVALID','Thông tin không khớp phiên OTP.');
     });
-    if (session.request_fingerprint !== expectedFingerprint) {
-        throw new AuthHttpError(400, 'AUTH_OTP_INVALID', 'Phien OTP khong hop le.');
-    }
-    const incomingHash = hashRegisterOtp(otpSessionId, otpCode);
-    if (incomingHash !== session.otp_hash) {
-        const attemptsLeft = Math.max(Number(session.attempts_left || 0) - 1, 0);
-        await getPool().query(`
-          UPDATE auth_register_otps
-          SET attempts_left = $2, updated_at = NOW()
-          WHERE id = $1
-        `, [otpSessionId, attemptsLeft]);
-        throw new AuthHttpError(400, 'AUTH_OTP_INVALID', attemptsLeft <= 0
-            ? 'Ma OTP sai qua so lan cho phep. Vui long yeu cau ma moi.'
-            : 'Ma OTP khong chinh xac.');
-    }
-    await getPool().query(`
-      UPDATE auth_register_otps
-      SET consumed_at = NOW(), updated_at = NOW()
-      WHERE id = $1
-    `, [otpSessionId]);
 };
 export const issueRegisterOtp = async (payload) => {
     await initializeAuthCore();
@@ -1131,7 +734,8 @@ export const issueRegisterOtp = async (payload) => {
             throw new AuthHttpError(429, 'AUTH_OTP_RATE_LIMIT', `Vui long cho ${waitSeconds}s de gui lai OTP.`);
         }
     }
-    const otpSessionId = `otp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await consumeRate('otp', normalizedEmail);
+    const otpSessionId = `otp-${crypto.randomUUID()}`;
     const otpCode = createRegisterOtpCode();
     const otpHash = hashRegisterOtp(otpSessionId, otpCode);
     const purpose = getRegisterOtpPurpose(role);
@@ -1168,19 +772,19 @@ export const issueRegisterOtp = async (payload) => {
             purpose,
             fullName: String(payload?.profile?.name || '').trim(),
         });
-        delivery = sent ? 'gmail' : 'dev_console';
+        delivery = sent ? (process.env.AUTH_SMTP_HOST ? 'smtp' : 'gmail') : 'dev_console';
         if (!sent && process.env.NODE_ENV === 'production') {
             throw new AuthHttpError(500, 'AUTH_SERVER_ERROR', 'OTP email chua duoc cau hinh Gmail SMTP.');
         }
     }
     catch (error) {
-        console.error('[auth-otp] send email failed', error);
+        console.error('[auth-otp] send email failed');
         if (process.env.NODE_ENV === 'production') {
             throw new AuthHttpError(500, 'AUTH_SERVER_ERROR', 'Khong the gui OTP qua email.');
         }
     }
     if (delivery === 'dev_console') {
-        console.log(`[auth-otp] OTP ${otpCode} for ${normalizedUsername} -> ${maskEmailForLog(normalizedEmail)}`);
+        console.info('[auth-otp] development delivery available only in explicit dev response.');
     }
     return {
         otpSessionId,
@@ -1459,7 +1063,10 @@ export const listScopedUsers = async (token, query = {}) => {
         params.push(parsed.classNameFilter);
         clauses.push(`profile_class_name = $${params.length}`);
     }
-    params.push(parsed.limit);
+    const totalResult=await getPool().query(`SELECT COUNT(*)::int AS total FROM auth_users WHERE ${clauses.join(' AND ')}`,params);
+    if(query.cursor){try{const cursor=JSON.parse(Buffer.from(String(query.cursor),'base64url').toString('utf8'));if(!Array.isArray(cursor)||cursor.length!==2||typeof cursor[0]!=='string'||!Number.isFinite(Date.parse(cursor[0]))||typeof cursor[1]!=='string'||cursor[1].length>150)throw new Error();params.push(cursor[0],cursor[1]);clauses.push(`(created_at,id)<($${params.length-1}::timestamptz,$${params.length})`);}catch{throw new AuthHttpError(400,'AUTH_SERVER_ERROR','Cursor không hợp lệ.');}}
+    params.push(parsed.limit+1);
+
     const result = await getPool().query(`
       SELECT
         id,
@@ -1475,14 +1082,17 @@ export const listScopedUsers = async (token, query = {}) => {
         profile_class_name,
         profile_phone,
         profile_teacher_type,
-        profile_subject
+        profile_subject,created_at,
+        TO_CHAR(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_time
       FROM auth_users
       WHERE ${clauses.join(' AND ')}
-      ORDER BY created_at DESC
+      ORDER BY created_at DESC,id DESC
       LIMIT $${params.length}
     `, params);
     return {
-        users: result.rows.map((row) => toApiUser(mapUserRow(row))),
+        users: result.rows.slice(0,parsed.limit).map((row) => toApiUser(mapUserRow(row))),
+        total:totalResult.rows[0].total,
+        nextCursor:result.rows.length>parsed.limit?Buffer.from(JSON.stringify([result.rows[parsed.limit-1].cursor_time,result.rows[parsed.limit-1].id])).toString('base64url'):null,
     };
 };
 export const approveTeacherAccount = async (token, payload = {}) => {
@@ -1623,7 +1233,7 @@ export const rejectTeacherAccount = async (token, payload = {}) => {
         }
     }
     catch (error) {
-        console.error('[auth-teacher-reject] send email failed', error);
+        console.error('[auth-teacher-reject] send email failed');
     }
     return {
         teacherId,
@@ -1665,7 +1275,6 @@ export const createAdminAccount = async (token, payload) => {
 };
 export const createClassJoinCode = async (token, input = {}) => {
     await initializeAuthCore();
-    await cleanupExpiredJoinCodes();
     const user = await getCurrentUser(token);
     if (user.role !== 'teacher') {
         throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Chi giao vien moi duoc tao ma lop.');
@@ -1765,13 +1374,12 @@ export const createClassJoinCode = async (token, input = {}) => {
 };
 export const listActiveClassJoinCodes = async (token) => {
     await initializeAuthCore();
-    await cleanupExpiredJoinCodes();
     const user = await getCurrentUser(token);
     if (user.role !== 'teacher' && user.role !== 'admin' && user.role !== 'superadmin') {
         throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Khong co quyen xem ma lop.');
     }
-    const teacherClause = user.role === 'teacher' ? 'AND teacher_id = $1' : '';
-    const params = user.role === 'teacher' ? [user.id] : [];
+    const teacherClause = user.role === 'teacher' ? 'AND teacher_id = $1' : user.role === 'admin' ? 'AND school = $1' : '';
+    const params = user.role === 'teacher' ? [user.id] : user.role === 'admin' ? [user.profile.school || '__unassigned__'] : [];
     const result = await getPool().query(`
       SELECT
         id,
@@ -1804,8 +1412,8 @@ export const revokeClassJoinCode = async (token, payload) => {
     if (!codeId) {
         throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Thieu id ma lop can thu hoi.');
     }
-    const ownershipClause = user.role === 'teacher' ? 'AND teacher_id = $2' : '';
-    const params = user.role === 'teacher' ? [codeId, user.id] : [codeId];
+    const ownershipClause = user.role === 'teacher' ? 'AND teacher_id = $2' : user.role === 'admin' ? 'AND school = $2' : '';
+    const params = user.role === 'teacher' ? [codeId, user.id] : user.role === 'admin' ? [codeId,user.profile.school || '__unassigned__'] : [codeId];
     const result = await getPool().query(`
       UPDATE class_join_codes
       SET
@@ -1849,8 +1457,9 @@ export const listClassJoinCodeEvents = async (token, input = {}) => {
         throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Khong co quyen xem lich su ma lop.');
     }
     const limit = Math.min(Math.max(Number(input.limit || 50), 1), 200);
-    const teacherClause = user.role === 'teacher' ? 'AND teacher_id = $1' : '';
-    const params = user.role === 'teacher' ? [user.id, limit] : [limit];
+    const restricted = user.role === 'teacher' || user.role === 'admin';
+    const teacherClause = user.role === 'teacher' ? 'AND teacher_id = $1' : user.role === 'admin' ? 'AND school = $1' : '';
+    const params = restricted ? [user.role === 'teacher' ? user.id : user.profile.school || '__unassigned__', limit] : [limit];
     const result = await getPool().query(`
       SELECT
         id,
@@ -1867,7 +1476,7 @@ export const listClassJoinCodeEvents = async (token, input = {}) => {
       WHERE 1 = 1
         ${teacherClause}
       ORDER BY created_at DESC
-      LIMIT $${user.role === 'teacher' ? '2' : '1'}
+      LIMIT $${restricted ? '2' : '1'}
     `, params);
     return result.rows.map(mapJoinCodeEventRow);
 };
@@ -1879,8 +1488,11 @@ export const loginAccount = async (payload) => {
     const normalizedUsername = typeof payload.username === 'string'
         ? normalizeUsername(payload.username)
         : '';
-    const account = await findAccountByUsername(normalizedUsername);
-    if (!account || typeof payload.password !== 'string' || !verifyPassword(payload.password, account.passwordHash)) {
+    const account = await passwordAttempt(normalizedUsername, async () => {
+        const found = await findAccountByUsername(normalizedUsername);
+        return found && typeof payload.password === 'string' && verifyPassword(payload.password, found.passwordHash) ? found : null;
+    });
+    if (!account) {
         throw new AuthHttpError(401, 'AUTH_INVALID_CREDENTIALS', 'Tai khoan hoac mat khau khong chinh xac.');
     }
     if (account.status !== 'active') {
@@ -1893,7 +1505,6 @@ export const loginAccount = async (payload) => {
 };
 export const getCurrentUser = async (token) => {
     await initializeAuthCore();
-    await cleanupExpiredSessions();
     if (!token) {
         throw new AuthHttpError(401, 'AUTH_INVALID_CREDENTIALS', 'Phien dang nhap khong hop le.');
     }
@@ -1909,6 +1520,7 @@ export const getCurrentUser = async (token) => {
     if (!account) {
         throw new AuthHttpError(401, 'AUTH_INVALID_CREDENTIALS', 'Khong tim thay tai khoan dang nhap.');
     }
+    if (account.status !== 'active') throw new AuthHttpError(403, 'AUTH_PENDING_APPROVAL', 'Tài khoản không còn hoạt động.');
     return toApiUser(account);
 };
 export const logoutToken = async (token) => {
@@ -1935,3 +1547,7 @@ export const logoutToken = async (token) => {
 
 
 
+
+export const closeAuthDatabase = async () => { if (pool) { await pool.end(); pool=null; initializedPromise=null; } };
+
+export const listRegistrationSchools = async () => { await initializeAuthCore(); const r=await getPool().query("SELECT DISTINCT profile_school FROM auth_users WHERE role='admin' AND status='active' AND profile_school<>'' ORDER BY profile_school"); return r.rows.map((row,index)=>({id:String(index),name:normalizeSchoolName(row.profile_school)})); };

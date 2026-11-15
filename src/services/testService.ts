@@ -66,8 +66,9 @@ type ApiReportAttempt = {
   scoreLevel: string;
   suggestDass21: boolean;
   submittedAt: string;
-  riskLevel: 'low' | 'medium' | 'high';
-  isHighRisk: boolean;
+  scorePayload?:Record<string,unknown>;
+  riskLevel: 'low' | 'medium' | 'high' | 'unreviewed';
+  isHighRisk: boolean | null;
 };
 
 type ServiceResult<T> = {
@@ -95,15 +96,16 @@ const buildApiUrl = (path: string) => `${getApiBaseUrl()}${TEST_API_PREFIX}${pat
 
 const callApi = async (path: string, init?: RequestInit): Promise<unknown | null> => {
   if (!isBrowser()) return null;
+  if((import.meta as {env?:Record<string,unknown>}).env?.MODE==='demo')return {ok:false,error:{code:'DEMO_MODE',message:'Demo chỉ xem giao diện, không gọi API bài test thật.'}};
   const token = authService.getAccessToken();
-  if (!token) return null;
+
 
   try {
     const response = await fetch(buildApiUrl(path), {
       ...init,
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
         ...(init?.headers || {}),
       },
     });
@@ -136,6 +138,10 @@ const normalizeError = (message: string): ServiceResult<never> => ({
 });
 
 export const testService = {
+  async readDraft(id:string){return callApi(`/drafts/${encodeURIComponent(id)}`) as Promise<{ok:boolean;draft?:{answers:Record<string,number>;revision:number};error?:{message:string}}>;},
+  async saveDraft(id:string,answers:Record<string,number>,revision:number){return callApi(`/drafts/${encodeURIComponent(id)}`,{method:'PUT',body:JSON.stringify({answers,revision})}) as Promise<{ok:boolean;draft?:{revision:number};error?:{message:string}}>;},
+  async clearDraft(id:string){return callApi(`/drafts/${encodeURIComponent(id)}`,{method:'DELETE'});},
+
   async listCatalog(): Promise<ServiceResult<{ userRole: string; templates: ApiTestTemplate[] }>> {
     const payload = await callApi('/catalog', { method: 'GET' });
     if (!payload || typeof payload !== 'object') {
@@ -323,6 +329,7 @@ export const testService = {
     title: string;
     description?: string;
     targetAudience?: ApiTemplateAudience;
+    questionList?: {text:string;options:{text:string;score:number}[]}[];
   }): Promise<ServiceResult<{ template: ApiTestTemplate }>> {
     const body = await callApi('/templates', {
       method: 'POST',
@@ -355,6 +362,7 @@ export const testService = {
       title?: string;
       description?: string;
       targetAudience?: ApiTemplateAudience;
+    questionList?: {text:string;options:{text:string;score:number}[]}[];
       isActive?: boolean;
     },
   ): Promise<ServiceResult<{ template: ApiTestTemplate }>> {
@@ -486,14 +494,14 @@ export const testService = {
       totalAttempts: number;
       uniqueUsers: number;
       avgScore: number;
-      highRiskCount: number;
-      highRiskRate: number;
+      highRiskCount: number | null;
+      highRiskRate: number | null;
     };
     byMonth: Array<{
       month: string;
       count: number;
       avgScore: number;
-      highRiskCount: number;
+      highRiskCount: number | null;
       studentCount: number;
       teacherCount: number;
       studentAvgScore: number;
@@ -545,14 +553,14 @@ export const testService = {
         totalAttempts?: number;
         uniqueUsers?: number;
         avgScore?: number;
-        highRiskCount?: number;
-        highRiskRate?: number;
+        highRiskCount?: number | null;
+        highRiskRate?: number | null;
       };
       byMonth?: Array<{
         month: string;
         count: number;
         avgScore: number;
-        highRiskCount: number;
+        highRiskCount: number | null;
         studentCount: number;
         teacherCount: number;
         studentAvgScore: number;
@@ -603,8 +611,8 @@ export const testService = {
           totalAttempts: Number(result.summary?.totalAttempts || 0),
           uniqueUsers: Number(result.summary?.uniqueUsers || 0),
           avgScore: Number(result.summary?.avgScore || 0),
-          highRiskCount: Number(result.summary?.highRiskCount || 0),
-          highRiskRate: Number(result.summary?.highRiskRate || 0),
+          highRiskCount: result.summary?.highRiskCount ?? null,
+          highRiskRate: result.summary?.highRiskRate ?? null,
         },
         byMonth: Array.isArray(result.byMonth) ? result.byMonth : [],
         byRole: Array.isArray(result.byRole) ? result.byRole : [],

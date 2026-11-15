@@ -1,0 +1,2 @@
+import {defineConfig} from '@playwright/test';
+export default defineConfig({testDir:'.',testMatch:'*.spec.ts',workers:1,fullyParallel:false,retries:0,timeout:90000,expect:{timeout:10000},outputDir:'/evidence/work',reporter:[['json',{outputFile:'/evidence/e2e.json'}]],use:{baseURL:process.env.ACCEPTANCE_URL,ignoreHTTPSErrors:false,trace:'off',video:'off',screenshot:'off',headless:true},projects:[{name:'chromium',use:{browserName:'chromium'}}]});

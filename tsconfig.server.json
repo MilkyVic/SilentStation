@@ -1,4 +1,4 @@
-﻿{
+{
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": false,
@@ -8,7 +8,19 @@
     "sourceMap": false,
     "declaration": false,
     "allowJs": false,
-    "allowImportingTsExtensions": false
+    "allowImportingTsExtensions": false,
+    "rootDir": "."
   },
-  "include": ["server/**/*.ts"]
+  "include": [
+    "server/**/*.ts",
+    "shared/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "server/**/*.test.ts",
+    "server/loadtest/**",
+    "server/test-fixtures/**",
+    "server/seed-demo.ts",
+    "server/test-question-bank.ts"
+  ]
 }

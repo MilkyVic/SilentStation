@@ -1,0 +1,2 @@
+import type { AuthAccount, AuthRole } from '../../types/auth';
+export function demoAccount(role: AuthRole): AuthAccount { return { id: `DEMO-${role}`, username: 'demo', password: '', role, status: 'active', profile: { name: `Demo · ${role}`, email: 'demo@example.invalid', birthYear: '', gender: '', school: 'Trường minh họa', className: role === 'Giáo viên' ? '12A1' : '', teacherType: role === 'Giáo viên' ? 'homeroom' : '', subject: '' } }; }

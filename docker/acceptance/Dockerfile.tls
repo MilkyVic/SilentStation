@@ -1,0 +1,7 @@
+ARG PG_IMAGE=postgres:16-alpine
+FROM ${PG_IMAGE}
+USER root
+RUN apk add --no-cache openssl
+COPY docker/acceptance/tls-init.sh /tls-init.sh
+COPY docker/acceptance/secrets-init.sh /secrets-init.sh
+ENTRYPOINT ["sh", "/tls-init.sh"]

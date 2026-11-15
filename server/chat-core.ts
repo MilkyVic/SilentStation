@@ -625,7 +625,7 @@ export const sendChatMessage = async (payload: unknown) => {
         reply = fallbackAnswer(incomingMessage, contextChunks);
       }
     } catch (error) {
-      console.error('[chat-core] Gemini generate failed', error);
+      console.error('[chat-core] Gemini generate failed');
       usedFallback = true;
       reply = fallbackAnswer(incomingMessage, contextChunks);
     }

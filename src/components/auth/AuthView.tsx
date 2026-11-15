@@ -70,7 +70,7 @@ export default function AuthView({
 
   const [otpSessionId, setOtpSessionId] = useState('');
   const [otpCode, setOtpCode] = useState('');
-  const [otpDelivery, setOtpDelivery] = useState<'gmail' | 'dev_console' | null>(null);
+  const [otpDelivery, setOtpDelivery] = useState<'gmail' | 'smtp' | 'dev_console' | null>(null);
   const [otpExpiresAt, setOtpExpiresAt] = useState<number | null>(null);
   const [devOtpCode, setDevOtpCode] = useState<string | null>(null);
   const [adminLoginOtpRequired, setAdminLoginOtpRequired] = useState(false);
@@ -728,7 +728,7 @@ export default function AuthView({
                   {otpSessionId && (
                     <div className="space-y-3 rounded-2xl border border-brand-primary/20 bg-brand-primary/5 p-4">
                       <p className="text-[11px] font-bold text-brand-primary">
-                        Nhập mã OTP email để hoàn tất đăng ký {otpDelivery === 'gmail' ? '(đã gửi qua Gmail)' : '(chế độ dev)'}.
+                        Nhập mã OTP email để hoàn tất đăng ký {otpDelivery === 'dev_console' ? '(chế độ dev)' : '(đã gửi qua email)'}.
                       </p>
 
                       {otpExpiryDisplay && (

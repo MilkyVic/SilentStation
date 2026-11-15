@@ -1,8 +1,9 @@
 import crypto from 'node:crypto';
+import {legacyArithmetic,LEGACY_SCORE_VERSION} from './test-scoring/legacy-arithmetic.js';
+import {validateQuestionList,replaceQuestions,appendVersion} from './test-template-store.js';
 import { Pool } from 'pg';
+import { databaseConfig } from './runtime-config.js';
 import { AuthHttpError, getCurrentUser, initializeAuthCore } from './auth-core.js';
-import { scoreDass21, scoreGad7, scorePhq9, shouldSuggestDass21ByCoreTest } from './test-scoring/engine.js';
-import { SYSTEM_TEMPLATE_QUESTIONS, type SeedQuestion } from './test-question-bank.js';
 
 type TestAudience = 'student' | 'teacher' | 'both';
 type TemplateCode = 'PHQ9' | 'GAD7' | 'SDQ25' | 'MT' | 'DASS21' | 'MBI22' | 'CUSTOM';
@@ -30,237 +31,7 @@ const DATABASE_URL = process.env.DATABASE_URL;
 let pool: Pool | null = null;
 let initialized = false;
 
-const getPool = () => {
-  if (!DATABASE_URL) {
-    throw new AuthHttpError(500, 'AUTH_SERVER_ERROR', 'Thieu bien moi truong DATABASE_URL.');
-  }
-  if (pool) return pool;
-  pool = new Pool({
-    connectionString: DATABASE_URL,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-  });
-  return pool;
-};
-
-const testSchemaSql = `
-CREATE TABLE IF NOT EXISTS test_templates (
-  id TEXT PRIMARY KEY,
-  title TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  target_audience TEXT NOT NULL CHECK (target_audience IN ('student', 'teacher', 'both')),
-  template_code TEXT NOT NULL DEFAULT 'CUSTOM',
-  is_system BOOLEAN NOT NULL DEFAULT FALSE,
-  is_active BOOLEAN NOT NULL DEFAULT TRUE,
-  display_order INTEGER NOT NULL DEFAULT 100,
-  created_by_user_id TEXT NULL REFERENCES auth_users(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_test_templates_active ON test_templates (is_active, display_order);
-
-CREATE TABLE IF NOT EXISTS test_attempts (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
-  template_id TEXT NOT NULL REFERENCES test_templates(id) ON DELETE CASCADE,
-  user_role TEXT NOT NULL CHECK (user_role IN ('student', 'teacher', 'admin', 'superadmin')),
-  score_total INTEGER NOT NULL DEFAULT 0,
-  score_level TEXT NOT NULL DEFAULT '',
-  score_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-  answers JSONB NOT NULL DEFAULT '[]'::jsonb,
-  suggest_dass21 BOOLEAN NOT NULL DEFAULT FALSE,
-  submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_test_attempts_user_time ON test_attempts (user_id, submitted_at DESC);
-CREATE INDEX IF NOT EXISTS idx_test_attempts_template_time ON test_attempts (template_id, submitted_at DESC);
-
-CREATE TABLE IF NOT EXISTS test_questions (
-  id TEXT PRIMARY KEY,
-  template_id TEXT NOT NULL REFERENCES test_templates(id) ON DELETE CASCADE,
-  question_order INTEGER NOT NULL CHECK (question_order > 0),
-  content TEXT NOT NULL,
-  subscale TEXT NOT NULL DEFAULT '',
-  is_reverse BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (template_id, question_order)
-);
-
-CREATE INDEX IF NOT EXISTS idx_test_questions_template_order ON test_questions (template_id, question_order);
-
-CREATE TABLE IF NOT EXISTS test_options (
-  id TEXT PRIMARY KEY,
-  question_id TEXT NOT NULL REFERENCES test_questions(id) ON DELETE CASCADE,
-  option_order INTEGER NOT NULL CHECK (option_order > 0),
-  label TEXT NOT NULL,
-  score INTEGER NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (question_id, option_order)
-);
-
-CREATE INDEX IF NOT EXISTS idx_test_options_question_order ON test_options (question_id, option_order);
-
-CREATE TABLE IF NOT EXISTS test_template_versions (
-  id TEXT PRIMARY KEY,
-  template_id TEXT NOT NULL,
-  version_number INTEGER NOT NULL,
-  action TEXT NOT NULL CHECK (action IN ('create', 'update', 'publish', 'unpublish', 'delete')),
-  actor_user_id TEXT NULL REFERENCES auth_users(id) ON DELETE SET NULL,
-  snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (template_id, version_number)
-);
-
-CREATE INDEX IF NOT EXISTS idx_test_template_versions_template ON test_template_versions (template_id, version_number DESC);
-`;
-
-const CORE_TEMPLATES: TestTemplate[] = [
-  {
-    id: '1',
-    title: 'Bai test PHQ-9',
-    description: 'Danh gia muc do tram cam.',
-    targetAudience: 'student',
-    templateCode: 'PHQ9',
-    isSystem: true,
-    isActive: true,
-    displayOrder: 1,
-  },
-  {
-    id: '2',
-    title: 'Bai test GAD-7',
-    description: 'Danh gia muc do lo au.',
-    targetAudience: 'student',
-    templateCode: 'GAD7',
-    isSystem: true,
-    isActive: true,
-    displayOrder: 2,
-  },
-  {
-    id: '3',
-    title: 'Bai test SDQ-25',
-    description: 'Bang hoi diem manh va diem yeu.',
-    targetAudience: 'student',
-    templateCode: 'SDQ25',
-    isSystem: true,
-    isActive: true,
-    displayOrder: 3,
-  },
-  {
-    id: '4',
-    title: 'Bai test Moi truong hoc duong',
-    description: 'Danh gia moi truong hoc duong than thien suc khoe tam than.',
-    targetAudience: 'student',
-    templateCode: 'MT',
-    isSystem: true,
-    isActive: true,
-    displayOrder: 4,
-  },
-  {
-    id: '5',
-    title: 'Bai test DASS-21',
-    description: 'Danh gia muc do stress, lo au, tram cam.',
-    targetAudience: 'both',
-    templateCode: 'DASS21',
-    isSystem: true,
-    isActive: true,
-    displayOrder: 5,
-  },
-  {
-    id: '6',
-    title: 'Bai test MBI-22',
-    description: 'Danh gia kiet suc nghe nghiep cho giao vien.',
-    targetAudience: 'teacher',
-    templateCode: 'MBI22',
-    isSystem: true,
-    isActive: true,
-    displayOrder: 6,
-  },
-];
-
-const buildSeedQuestionId = (templateId: string, order: number) => `${templateId}-q${order}`;
-const buildSeedOptionId = (questionId: string, order: number) => `${questionId}-o${order}`;
-
-const seedTemplateQuestions = async (templateId: string, questions: SeedQuestion[]) => {
-  const usedQuestionIds: string[] = [];
-  const usedOptionIds: string[] = [];
-
-  for (const item of questions) {
-    const questionId = buildSeedQuestionId(templateId, item.order);
-    usedQuestionIds.push(questionId);
-
-    await getPool().query(`
-      INSERT INTO test_questions (
-        id, template_id, question_order, content, subscale, is_reverse
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        template_id = EXCLUDED.template_id,
-        question_order = EXCLUDED.question_order,
-        content = EXCLUDED.content,
-        subscale = EXCLUDED.subscale,
-        is_reverse = EXCLUDED.is_reverse,
-        updated_at = NOW()
-    `, [
-      questionId,
-      templateId,
-      item.order,
-      item.text,
-      item.subscale || '',
-      Boolean(item.isReverse),
-    ]);
-
-    for (const option of item.options) {
-      const optionId = buildSeedOptionId(questionId, option.order);
-      usedOptionIds.push(optionId);
-
-      await getPool().query(`
-        INSERT INTO test_options (
-          id, question_id, option_order, label, score
-        ) VALUES (
-          $1, $2, $3, $4, $5
-        )
-        ON CONFLICT (id) DO UPDATE SET
-          question_id = EXCLUDED.question_id,
-          option_order = EXCLUDED.option_order,
-          label = EXCLUDED.label,
-          score = EXCLUDED.score,
-          updated_at = NOW()
-      `, [
-        optionId,
-        questionId,
-        option.order,
-        option.label,
-        option.score,
-      ]);
-    }
-  }
-
-  await getPool().query(`
-    DELETE FROM test_options o
-    USING test_questions q
-    WHERE o.question_id = q.id
-      AND q.template_id = $1
-      AND NOT (o.id = ANY($2::text[]))
-  `, [templateId, usedOptionIds]);
-
-  await getPool().query(`
-    DELETE FROM test_questions
-    WHERE template_id = $1
-      AND NOT (id = ANY($2::text[]))
-  `, [templateId, usedQuestionIds]);
-};
-
-const seedSystemTemplateQuestions = async () => {
-  for (const template of CORE_TEMPLATES) {
-    if (!template.isSystem) continue;
-    const questions = SYSTEM_TEMPLATE_QUESTIONS[template.id];
-    if (!questions || questions.length === 0) continue;
-    await seedTemplateQuestions(template.id, questions);
-  }
-};
+const getPool = () => pool ??= new Pool(databaseConfig());
 
 const mapTemplateRow = (row: Record<string, any>) => ({
   id: row.id,
@@ -290,49 +61,9 @@ const clampInt = (value: unknown, fallback: number, min: number, max: number) =>
   return parsed;
 };
 
-const scoreByTemplate = (templateId: string, templateCode: string, answers: number[], fallbackScore?: number) => {
-  const code = String(templateCode || '').toUpperCase();
-
-  if (code === 'PHQ9') {
-    if (!answers.length) throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'PHQ-9 can du dap an de cham diem.');
-    const result = scorePhq9(answers);
-    return {
-      scoreTotal: result.total,
-      scoreLevel: result.level,
-      scorePayload: result,
-      suggestDass21: shouldSuggestDass21ByCoreTest(templateId, result.total),
-    };
-  }
-
-  if (code === 'GAD7') {
-    if (!answers.length) throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'GAD-7 can du dap an de cham diem.');
-    const result = scoreGad7(answers);
-    return {
-      scoreTotal: result.total,
-      scoreLevel: result.level,
-      scorePayload: result,
-      suggestDass21: shouldSuggestDass21ByCoreTest(templateId, result.total),
-    };
-  }
-
-  if (code === 'DASS21') {
-    if (!answers.length) throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'DASS-21 can du dap an de cham diem.');
-    const result = scoreDass21(answers);
-    return {
-      scoreTotal: result.stress.score + result.anxiety.score + result.depression.score,
-      scoreLevel: 'Đã chấm 3 thang',
-      scorePayload: result,
-      suggestDass21: false,
-    };
-  }
-
-  const scoreTotal = Number.isFinite(Number(fallbackScore)) ? Number(fallbackScore) : answers.reduce((sum, value) => sum + value, 0);
-  return {
-    scoreTotal,
-    scoreLevel: 'Đã hoàn thành',
-    scorePayload: { total: scoreTotal },
-    suggestDass21: shouldSuggestDass21ByCoreTest(templateId, scoreTotal),
-  };
+const scoreByTemplate = (_templateId: string,templateCode:string,answers:number[]) => {
+ const result=legacyArithmetic(templateCode,answers);
+ return {scoreTotal:result.total,scoreLevel:'Chưa duyệt diễn giải',scorePayload:{...result,scoreVersion:LEGACY_SCORE_VERSION,interpretationApproved:false},suggestDass21:false};
 };
 
 const ensureTemplateWritePermission = (userRole: string, isSystem: boolean) => {
@@ -393,44 +124,8 @@ const appendTemplateVersion = async (
 };
 
 export const initializeTestCore = async () => {
-  if (initialized) return;
-
-  await initializeAuthCore();
-  await getPool().query(testSchemaSql);
-
-  for (const template of CORE_TEMPLATES) {
-    await getPool().query(`
-      INSERT INTO test_templates (
-        id, title, description, target_audience, template_code, is_system, is_active, display_order
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        title = EXCLUDED.title,
-        description = EXCLUDED.description,
-        target_audience = EXCLUDED.target_audience,
-        template_code = EXCLUDED.template_code,
-        is_system = EXCLUDED.is_system,
-        is_active = EXCLUDED.is_active,
-        display_order = EXCLUDED.display_order,
-        updated_at = NOW()
-    `, [
-      template.id,
-      template.title,
-      template.description,
-      template.targetAudience,
-      template.templateCode,
-      template.isSystem,
-      template.isActive,
-      template.displayOrder,
-    ]);
-  }
-
-  await seedSystemTemplateQuestions();
-
-  initialized = true;
+  if (!initialized) { await initializeAuthCore(); await getPool().query('SELECT 1 FROM test_templates LIMIT 0'); initialized = true; }
 };
-
 export const listTestCatalog = async (token: string | null) => {
   await initializeTestCore();
   const user = await getCurrentUser(token);
@@ -456,7 +151,7 @@ export const listTestCatalog = async (token: string | null) => {
       FROM test_questions
       GROUP BY template_id
     ) q ON q.template_id = t.id
-    WHERE t.is_active = TRUE
+    WHERE t.archived_at IS NULL AND t.is_active = TRUE
       AND t.target_audience = ANY($1::text[])
     ORDER BY t.display_order ASC, t.created_at ASC
   `, [audiences]);
@@ -504,6 +199,7 @@ export const listManageTestTemplates = async (token: string | null) => {
       FROM test_template_versions
       GROUP BY template_id
     ) v ON v.template_id = t.id
+    WHERE t.archived_at IS NULL
     ORDER BY t.display_order ASC, t.created_at ASC
   `);
 
@@ -708,20 +404,18 @@ export const submitTestResult = async (token: string | null, payload: unknown) =
     throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Bai test dang tam dong.');
   }
 
-  const answers = sanitizeAnswers(body.answers);
-  const scoreData = scoreByTemplate(
-    templateId,
-    String(template.template_code || ''),
-    answers,
-    Number(body.score),
-  );
+  if(!Array.isArray(body.answers)||body.answers.some(value=>typeof value!=='number'||!Number.isFinite(value)))throw new AuthHttpError(400,'TEST_INVALID','Đáp án phải là số hợp lệ, không ép kiểu hay bỏ mất vị trí.');
+  const answers=body.answers as number[];
+  const allowed=await getPool().query('SELECT q.question_order,array_agg(o.score) AS scores FROM test_questions q JOIN test_options o ON o.question_id=q.id WHERE q.template_id=$1 GROUP BY q.id,q.question_order ORDER BY q.question_order',[templateId]);
+  if(!allowed.rows.length||allowed.rows.length!==answers.length||allowed.rows.some((row,index)=>!row.scores.includes(answers[index])))throw new AuthHttpError(400,'TEST_INVALID','Cần đủ câu và đáp án thuộc lựa chọn của template.');
+  const scoreData=scoreByTemplate(templateId,String(template.template_code||''),answers);
 
   const attemptId = `ta-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
   await getPool().query(`
     INSERT INTO test_attempts (
-      id, user_id, template_id, user_role, score_total, score_level, score_payload, answers, suggest_dass21
+      id, user_id, template_id, user_role, score_total, score_level, score_payload, answers, suggest_dass21, score_version, template_snapshot
     ) VALUES (
-      $1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9
+      $1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11::jsonb
     )
   `, [
     attemptId,
@@ -733,6 +427,7 @@ export const submitTestResult = async (token: string | null, payload: unknown) =
     JSON.stringify(scoreData.scorePayload),
     JSON.stringify(answers),
     scoreData.suggestDass21,
+    LEGACY_SCORE_VERSION,JSON.stringify(template),
   ]);
 
   return {
@@ -753,7 +448,7 @@ export const listMyTestResults = async (token: string | null) => {
     SELECT
       ta.id,
       ta.template_id,
-      tt.title AS template_title,
+      COALESCE(NULLIF(ta.template_snapshot->>'title',''),tt.title) AS template_title,
       ta.score_total,
       ta.score_level,
       ta.score_payload,
@@ -772,7 +467,7 @@ export const listMyTestResults = async (token: string | null) => {
       id: row.id,
       templateId: row.template_id,
       templateTitle: row.template_title,
-      scoreTotal: row.score_total,
+      scoreTotal: Number(row.score_total),
       scoreLevel: row.score_level,
       scorePayload: row.score_payload,
       suggestDass21: row.suggest_dass21,
@@ -848,9 +543,10 @@ export const getTestReportsOverview = async (token: string | null, query: unknow
       ta.user_id,
       ta.user_role,
       ta.template_id,
-      tt.title AS template_title,
+      COALESCE(NULLIF(ta.template_snapshot->>'title',''),tt.title) AS template_title,
       ta.score_total,
       ta.score_level,
+      ta.score_payload,
       ta.suggest_dass21,
       ta.submitted_at,
       u.username,
@@ -866,10 +562,11 @@ export const getTestReportsOverview = async (token: string | null, query: unknow
     LIMIT ${limitRef}
   `, params);
 
+  const totals=await getPool().query(`SELECT COUNT(*)::int AS total,COUNT(DISTINCT ta.user_id)::int AS users,COALESCE(AVG(ta.score_total),0)::float8 AS average FROM test_attempts ta JOIN auth_users u ON u.id=ta.user_id JOIN test_templates tt ON tt.id=ta.template_id WHERE ${where.join(' AND ')}`,params.slice(0,-1));
   const attempts = result.rows.map((row) => {
     const scoreTotal = Number(row.score_total || 0);
     const submittedAtIso = new Date(row.submitted_at).toISOString();
-    const isHighRisk = scoreTotal >= 10 || Boolean(row.suggest_dass21);
+    const isHighRisk = null; // No clinical inference from a combined/unreviewed numeric score.
 
     return {
       attemptId: row.id,
@@ -883,9 +580,10 @@ export const getTestReportsOverview = async (token: string | null, query: unknow
       templateTitle: row.template_title,
       scoreTotal,
       scoreLevel: row.score_level || '',
+      scorePayload: row.score_payload || {},
       suggestDass21: Boolean(row.suggest_dass21),
       submittedAt: submittedAtIso,
-      riskLevel: isHighRisk ? 'high' : (scoreTotal >= 5 ? 'medium' : 'low'),
+      riskLevel: 'unreviewed',
       isHighRisk,
     };
   });
@@ -1032,6 +730,14 @@ export const getTestReportsOverview = async (token: string | null, query: unknow
   const schoolOptions = Array.from(new Set(attempts.map((item) => item.school).filter(Boolean))).sort((a, b) => a.localeCompare(b));
   const classOptions = Array.from(new Set(attempts.map((item) => item.className).filter(Boolean))).sort((a, b) => a.localeCompare(b));
 
+  const scopeParams=params.slice(0,-1),scopeWhere=where.join(' AND ');
+  const joins='FROM test_attempts ta JOIN auth_users u ON u.id=ta.user_id JOIN test_templates tt ON tt.id=ta.template_id';
+  const [months,roles,templates,classes]=await Promise.all([
+   getPool().query(`SELECT TO_CHAR(ta.submitted_at AT TIME ZONE 'Asia/Ho_Chi_Minh','YYYY-MM') AS month,COUNT(*)::int AS count,AVG(ta.score_total)::float8 AS average,COUNT(*) FILTER(WHERE u.role='student')::int AS students,COUNT(*) FILTER(WHERE u.role='teacher')::int AS teachers,COALESCE(AVG(ta.score_total) FILTER(WHERE u.role='student'),0)::float8 AS student_average,COALESCE(AVG(ta.score_total) FILTER(WHERE u.role='teacher'),0)::float8 AS teacher_average ${joins} WHERE ${scopeWhere} GROUP BY 1 ORDER BY 1`,scopeParams),
+   getPool().query(`SELECT u.role,COUNT(*)::int AS count,AVG(ta.score_total)::float8 AS average ${joins} WHERE ${scopeWhere} GROUP BY u.role`,scopeParams),
+   getPool().query(`SELECT tt.id,tt.title,COUNT(*)::int AS count,AVG(ta.score_total)::float8 AS average ${joins} WHERE ${scopeWhere} GROUP BY tt.id,tt.title`,scopeParams),
+   getPool().query(`SELECT u.profile_school,u.profile_class_name,COUNT(*)::int AS count,AVG(ta.score_total)::float8 AS average ${joins} WHERE ${scopeWhere} GROUP BY u.profile_school,u.profile_class_name`,scopeParams),
+  ]);
   return {
     scope,
     filters: {
@@ -1041,16 +747,17 @@ export const getTestReportsOverview = async (token: string | null, query: unknow
       limit,
     },
     summary: {
-      totalAttempts: attempts.length,
-      uniqueUsers: uniqueUsers.size,
-      avgScore: attempts.length > 0 ? Number((totalScore / attempts.length).toFixed(2)) : 0,
-      highRiskCount,
-      highRiskRate: attempts.length > 0 ? Number(((highRiskCount / attempts.length) * 100).toFixed(2)) : 0,
+      totalAttempts: totals.rows[0].total,
+      uniqueUsers: totals.rows[0].users,
+      avgScore: Number(Number(totals.rows[0].average).toFixed(2)),
+      highRiskCount: null,
+      highRiskRate: null,
     },
-    byMonth,
-    byRole,
-    byTemplate,
-    byClass,
+    byMonth:months.rows.map(r=>({month:r.month,count:r.count,avgScore:Number(r.average.toFixed(2)),highRiskCount:null,studentCount:r.students,teacherCount:r.teachers,studentAvgScore:Number(r.student_average.toFixed(2)),teacherAvgScore:Number(r.teacher_average.toFixed(2))})),
+    byRole:roles.rows.map(r=>({role:r.role,count:r.count,avgScore:Number(r.average.toFixed(2)),highRiskCount:null})),
+    byTemplate:templates.rows.map(r=>({templateId:r.id,templateTitle:r.title,count:r.count,avgScore:Number(r.average.toFixed(2)),highRiskCount:null})),
+    byClass:classes.rows.map(r=>({className:`${r.profile_school} · ${r.profile_class_name}`,count:r.count,avgScore:Number(r.average.toFixed(2)),highRiskCount:null})),
+    classificationPending:true,
     recentRiskAlerts,
     schoolOptions,
     classOptions,
@@ -1081,7 +788,7 @@ export const getTestOpsSummary = async (token: string | null, query: unknown) =>
       COUNT(*)::int AS total_attempts,
       COALESCE(AVG(ta.score_total), 0)::float8 AS avg_score,
       COUNT(DISTINCT ta.user_id)::int AS unique_users,
-      SUM(CASE WHEN ta.suggest_dass21 = TRUE OR ta.score_total >= 10 THEN 1 ELSE 0 END)::int AS high_risk_count
+      NULL::int AS high_risk_count
     FROM test_attempts ta
     JOIN auth_users u ON u.id = ta.user_id
     WHERE ${baseWhere}
@@ -1117,8 +824,8 @@ export const getTestOpsSummary = async (token: string | null, query: unknown) =>
       totalAttempts,
       uniqueUsers: Number(totalResult.rows[0]?.unique_users || 0),
       avgScore: Number(Number(totalResult.rows[0]?.avg_score || 0).toFixed(2)),
-      highRiskCount,
-      highRiskRate: totalAttempts > 0 ? Number(((highRiskCount / totalAttempts) * 100).toFixed(2)) : 0,
+      highRiskCount: null,
+      highRiskRate: null,
       avgPerMinute,
       peakPerMinute,
     },
@@ -1126,134 +833,25 @@ export const getTestOpsSummary = async (token: string | null, query: unknown) =>
   };
 };
 
-export const createCustomTestTemplate = async (token: string | null, payload: unknown) => {
-  await initializeTestCore();
-  const user = await getCurrentUser(token);
-  if (user.role !== 'admin' && user.role !== 'superadmin') {
-    throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Chi Admin/Superadmin moi duoc tao bai test.');
-  }
-
-  const body = (payload && typeof payload === 'object') ? payload as Record<string, unknown> : {};
-  const title = String(body.title || '').trim();
-  if (!title) throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Thieu tieu de bai test.');
-  const description = String(body.description || '').trim();
-  const audienceRaw = String(body.targetAudience || 'both').trim().toLowerCase();
-  const targetAudience: TestAudience = audienceRaw === 'student' || audienceRaw === 'teacher' || audienceRaw === 'both'
-    ? audienceRaw
-    : 'both';
-
-  const templateId = `ct-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-  await getPool().query(`
-    INSERT INTO test_templates (
-      id, title, description, target_audience, template_code, is_system, is_active, display_order, created_by_user_id
-    ) VALUES (
-      $1, $2, $3, $4, 'CUSTOM', FALSE, TRUE, 1000, $5
-    )
-  `, [templateId, title, description, targetAudience, user.id]);
-
-  const created = await getPool().query(`
-    SELECT id, title, description, target_audience, template_code, is_system, is_active, display_order, created_by_user_id, created_at, updated_at
-    FROM test_templates
-    WHERE id = $1
-    LIMIT 1
-  `, [templateId]);
-
-  await appendTemplateVersion(created.rows[0], 'create', user.id);
-  return { template: mapTemplateRow(created.rows[0]) };
+export const createCustomTestTemplate = async(token:string|null,payload:unknown)=>{
+ await initializeTestCore();const user=await getCurrentUser(token);if(!['admin','superadmin'].includes(user.role))throw new AuthHttpError(403,'AUTH_INVALID_ROLE','Không có quyền quản trị bài test.');
+ const b=(payload&&typeof payload==='object'?payload:{}) as Record<string,unknown>;const title=String(b.title||'').trim();if(!title)throw new AuthHttpError(400,'TEST_INVALID','Thiếu tiêu đề.');const qs=validateQuestionList(b.questionList??[]);const audience=['student','teacher','both'].includes(String(b.targetAudience))?String(b.targetAudience):'both';
+ const client=await getPool().connect();try{await client.query('BEGIN');const id=`ct-${crypto.randomUUID()}`;const r=await client.query("INSERT INTO test_templates(id,title,description,target_audience,template_code,is_system,is_active,display_order,created_by_user_id) VALUES($1,$2,$3,$4,'CUSTOM',FALSE,FALSE,1000,$5) RETURNING *",[id,title,String(b.description||''),audience,user.id]);await replaceQuestions(client,id,qs);await appendVersion(client,r.rows[0],'create',user.id);await client.query('COMMIT');return {template:{...mapTemplateRow(r.rows[0]),questionCount:qs.length}};}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
 };
-
-export const updateCustomTestTemplate = async (token: string | null, templateId: string, payload: unknown) => {
-  await initializeTestCore();
-  const user = await getCurrentUser(token);
-  if (user.role !== 'admin' && user.role !== 'superadmin') {
-    throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Chi Admin/Superadmin moi duoc sua bai test.');
-  }
-
-  const existing = await getPool().query(`
-    SELECT id, title, description, target_audience, template_code, is_system, is_active, display_order, created_by_user_id, created_at, updated_at
-    FROM test_templates
-    WHERE id = $1
-    LIMIT 1
-  `, [templateId]);
-  if (existing.rows.length === 0) throw new AuthHttpError(404, 'AUTH_SERVER_ERROR', 'Khong tim thay bai test.');
-
-  const row = existing.rows[0];
-  ensureTemplateWritePermission(user.role, row.is_system);
-  if (user.role === 'admin' && row.created_by_user_id !== user.id) {
-    throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Admin chi duoc sua test custom do minh tao.');
-  }
-
-  const body = (payload && typeof payload === 'object') ? payload as Record<string, unknown> : {};
-  const title = String(body.title || '').trim();
-  const description = String(body.description || '').trim();
-  const audienceRaw = String(body.targetAudience || '').trim().toLowerCase();
-  const targetAudience = audienceRaw === 'student' || audienceRaw === 'teacher' || audienceRaw === 'both'
-    ? audienceRaw
-    : null;
-  const nextIsActive = typeof body.isActive === 'boolean' ? body.isActive : null;
-
-  await getPool().query(`
-    UPDATE test_templates
-    SET
-      title = COALESCE(NULLIF($2, ''), title),
-      description = COALESCE(NULLIF($3, ''), description),
-      target_audience = COALESCE($4, target_audience),
-      is_active = COALESCE($5, is_active),
-      updated_at = NOW()
-    WHERE id = $1
-  `, [templateId, title, description, targetAudience, nextIsActive]);
-
-  const updated = await getPool().query(`
-    SELECT id, title, description, target_audience, template_code, is_system, is_active, display_order, created_by_user_id, created_at, updated_at
-    FROM test_templates
-    WHERE id = $1
-    LIMIT 1
-  `, [templateId]);
-
-  const beforeActive = Boolean(row.is_active);
-  const afterActive = Boolean(updated.rows[0].is_active);
-  const action: TemplateVersionAction = beforeActive !== afterActive
-    ? (afterActive ? 'publish' : 'unpublish')
-    : 'update';
-  await appendTemplateVersion(updated.rows[0], action, user.id);
-  return { template: mapTemplateRow(updated.rows[0]) };
+export const updateCustomTestTemplate = async(token:string|null,id:string,payload:unknown)=>{
+ await initializeTestCore();const user=await getCurrentUser(token);if(!['admin','superadmin'].includes(user.role))throw new AuthHttpError(403,'AUTH_INVALID_ROLE','Không có quyền quản trị bài test.');
+ const b=(payload&&typeof payload==='object'?payload:{}) as Record<string,unknown>;const qs=b.questionList===undefined?undefined:validateQuestionList(b.questionList);
+ const client=await getPool().connect();try{await client.query('BEGIN');const selected=await client.query('SELECT * FROM test_templates WHERE id=$1 AND archived_at IS NULL FOR UPDATE',[id]);const row=selected.rows[0];if(!row)throw new AuthHttpError(404,'TEST_INVALID','Không tìm thấy bài test.');ensureTemplateWritePermission(user.role,row.is_system);if(user.role==='admin'&&row.created_by_user_id!==user.id)throw new AuthHttpError(403,'AUTH_INVALID_ROLE','Chỉ sửa test custom do mình tạo.');
+ if(qs&&row.is_system)throw new AuthHttpError(409,'TEST_SYSTEM_DEFINITION_LOCKED','Bank câu hỏi hệ thống giữ nguyên phiên bản; cần quy trình duyệt definition mới.');
+ if(qs)await replaceQuestions(client,id,qs);
+ const count=await client.query('SELECT COUNT(*)::int AS n FROM test_questions WHERE template_id=$1',[id]);if(b.isActive===true&&!count.rows[0].n)throw new AuthHttpError(400,'TEST_INVALID','Không mở bài chưa có câu hỏi.');
+ const audience=['student','teacher','both'].includes(String(b.targetAudience))?b.targetAudience:row.target_audience;
+ const r=await client.query('UPDATE test_templates SET title=$2,description=$3,target_audience=$4,is_active=$5,updated_at=NOW() WHERE id=$1 RETURNING *',[id,String(b.title??row.title).trim()||row.title,String(b.description??row.description),audience,typeof b.isActive==='boolean'?b.isActive:row.is_active]);
+ await appendVersion(client,r.rows[0],typeof b.isActive==='boolean'&&row.is_active!==b.isActive?(b.isActive?'publish':'unpublish'):'update',user.id);await client.query('COMMIT');return {template:{...mapTemplateRow(r.rows[0]),questionCount:count.rows[0].n}};}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
 };
-
-export const deleteCustomTestTemplate = async (token: string | null, templateId: string) => {
-  await initializeTestCore();
-  const user = await getCurrentUser(token);
-  if (user.role !== 'admin' && user.role !== 'superadmin') {
-    throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Chi Admin/Superadmin moi duoc xoa bai test.');
-  }
-
-  const existing = await getPool().query(`
-    SELECT id, title, description, target_audience, template_code, is_system, is_active, display_order, created_by_user_id, created_at, updated_at
-    FROM test_templates
-    WHERE id = $1
-    LIMIT 1
-  `, [templateId]);
-  if (existing.rows.length === 0) throw new AuthHttpError(404, 'AUTH_SERVER_ERROR', 'Khong tim thay bai test.');
-
-  const row = existing.rows[0];
-  ensureTemplateWritePermission(user.role, row.is_system);
-  if (user.role === 'admin' && row.created_by_user_id !== user.id) {
-    throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Admin chi duoc xoa test custom do minh tao.');
-  }
-
-  await appendTemplateVersion(row, 'delete', user.id);
-  await getPool().query(`
-    DELETE FROM test_templates
-    WHERE id = $1
-  `, [templateId]);
-
-  return { id: templateId };
+export const deleteCustomTestTemplate = async(token:string|null,id:string)=>{
+ await initializeTestCore();const user=await getCurrentUser(token);if(!['admin','superadmin'].includes(user.role))throw new AuthHttpError(403,'AUTH_INVALID_ROLE','Không có quyền quản trị bài test.');const client=await getPool().connect();try{await client.query('BEGIN');const r=await client.query('SELECT * FROM test_templates WHERE id=$1 AND archived_at IS NULL FOR UPDATE',[id]);const row=r.rows[0];if(!row)throw new AuthHttpError(404,'TEST_INVALID','Không tìm thấy bài test.');ensureTemplateWritePermission(user.role,row.is_system);if(user.role==='admin'&&row.created_by_user_id!==user.id)throw new AuthHttpError(403,'AUTH_INVALID_ROLE','Không có quyền với test của người khác.');await appendVersion(client,row,'delete',user.id);await client.query('UPDATE test_templates SET is_active=FALSE,archived_at=NOW() WHERE id=$1',[id]);await client.query('COMMIT');return {id};}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
 };
+export const publishTestTemplate = async(token:string|null,id:string,payload:unknown)=>{const b=payload as any;if(typeof b?.isActive!=='boolean')throw new AuthHttpError(400,'TEST_INVALID','Thiếu trạng thái.');return updateCustomTestTemplate(token,id,{isActive:b.isActive});};
 
-export const publishTestTemplate = async (token: string | null, templateId: string, payload: unknown) => {
-  const body = (payload && typeof payload === 'object') ? payload as Record<string, unknown> : {};
-  if (typeof body.isActive !== 'boolean') {
-    throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Thieu trang thai isActive.');
-  }
-  return updateCustomTestTemplate(token, templateId, { isActive: body.isActive });
-};
-
+export const closeTestDatabase = async () => { if (pool) { await pool.end(); pool=null; initialized=false; } };

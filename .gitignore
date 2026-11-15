@@ -6,3 +6,12 @@ coverage/
 *.log
 .env*
 !.env.example
+
+dist-server/server/
+dist-server/shared/
+
+dist-demo/
+
+.acceptance/
+artifacts/
+**/__pycache__/

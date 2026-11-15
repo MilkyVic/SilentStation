@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.server.json",
+  "include": [
+    "server/**/*.ts",
+    "shared/**/*.ts",
+    "api/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "server/loadtest/**"
+  ]
+}

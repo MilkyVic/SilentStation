@@ -59,6 +59,6 @@ Frontend local vẫn gọi `/api/*` qua Vite proxy.
 
 1. `AUTH_SEED_TEST_USERS` chỉ bật ở dev/staging.
 2. Không để `AUTH_SESSION_SECRET` mặc định ở production.
-3. Hiện tại schema được auto-create khi API start; có file SQL tham chiếu tại:
+3. Schema KHÔNG auto-create khi API start. Chỉ áp dụng migration rõ ràng trên DB đã được chọn và ủy quyền; có file SQL tại:
    - `server/sql/001_auth_schema.sql`
 4. Bước tiếp theo nên làm: migration tooling (Prisma/Drizzle/Knex) + rate-limit Redis.

@@ -92,8 +92,8 @@ export type AuthApiUser = {
 };
 
 export type AuthApiSession = {
-  tokenType: 'Bearer';
-  accessToken: string;
+  tokenType: 'Bearer' | 'Cookie';
+  accessToken?: string;
   refreshToken?: string;
   expiresAt: string;
 };
@@ -112,7 +112,7 @@ export type AuthApiLoginOtpChallengeResponse = {
   otpRequired: true;
   otpSessionId: string;
   expiresAt: string;
-  delivery: 'gmail' | 'dev_console';
+  delivery: 'gmail' | 'smtp' | 'dev_console';
   maskedEmail: string;
   devOtpCode?: string;
 };
@@ -187,6 +187,6 @@ export type AuthApiRegisterOtpResponse = {
   ok: true;
   otpSessionId: string;
   expiresAt: string;
-  delivery: 'gmail' | 'dev_console';
+  delivery: 'gmail' | 'smtp' | 'dev_console';
   devOtpCode?: string;
 };

@@ -56,6 +56,7 @@ export default function HandbookMarkdown({ content }: HandbookMarkdownProps) {
       }
       return (
         <img
+          loading="lazy" decoding="async"
           src={src}
           alt={alt}
           className={cn('rounded-2xl shadow-md my-12 object-cover border border-gray-100', layoutClass)}

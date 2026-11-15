@@ -33,6 +33,7 @@ export default function HandbookSidebar({
 }: HandbookSidebarProps) {
   return (
     <motion.aside
+      aria-hidden={!isSidebarOpen} inert={!isSidebarOpen}
       initial={false}
       animate={{ width: isSidebarOpen ? 320 : 0, opacity: isSidebarOpen ? 1 : 0 }}
       className={cn(
