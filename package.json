@@ -16,7 +16,7 @@
     "loadtest:pilot": "tsx server/loadtest/pilot-800.ts",
     "dev:demo": "vite --mode demo",
     "build:demo": "vite build --mode demo --outDir dist-demo",
-    "test": "tsx --test src/services/authService.test.ts server/test-scoring/engine.test.ts server/*.test.ts server/surveys/*.test.ts src/features/survey/SurveyPrint.test.tsx src/lib/save-queue.test.ts src/features/shell/ProfileMenu.test.tsx src/features/preferences/ui.test.ts",
+    "test": "tsx --test src/services/authService.test.ts server/test-scoring/engine.test.ts server/*.test.ts server/surveys/*.test.ts src/features/survey/SurveyPrint.test.tsx src/lib/save-queue.test.ts src/features/shell/*.test.tsx src/features/preferences/ui.test.ts",
     "test:integration": "node scripts/test-disposable-db.mjs",
     "db:migrate": "tsx server/migrate.ts",
     "db:seed:demo": "tsx server/seed-demo.ts",

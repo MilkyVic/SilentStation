@@ -23,3 +23,14 @@ Xem [native/cloud runbook](docs/implementation/NATIVE_ACCEPTANCE_RUNBOOK.md), [d
 Xem `docs/implementation/PREDEPLOY_111.md`: bounded API packaging, strict Neon baseline,
 CLI dry-run phục hồi tài khoản chính thức và các checkpoint Production chưa thực hiện.
 Không dùng seed/fixture initializer để tạo tài khoản trên DB thật.
+
+### Giao diện gọn — cập nhật theo yêu cầu vận hành
+- Không hiển thị banner TEST/DEMO hoặc dòng kết nối API khi backend khỏe.
+  Cảnh báo backend chưa sẵn sàng/mất kết nối vẫn được giữ.
+- Bộ chuyển vai trò chỉ tồn tại trong demo mode, ở chân trang. Production không
+  có bộ chuyển vai trò hoặc fallback đăng nhập.
+- Việc bỏ banner không đổi `is_qa`, provenance, quyền, nội dung/scoring/consent
+  hoặc các gate thu dữ liệu. Nhãn TEST/QA từng bản ghi và dữ liệu fixture vẫn
+  được tách biệt; không seed dữ liệu kiểm thử vào Production.
+- Flag fixture lịch sử `VITE_ACCEPTANCE_BANNER` không còn tạo banner giao diện.
+  Không dùng sự hiện diện/vắng mặt banner làm bằng chứng môi trường hoặc quyền.

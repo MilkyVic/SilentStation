@@ -29,7 +29,7 @@ export const shell:Record<string,string>={
   "Khảo sát theo mã đợt không bắt đăng nhập. Bài tự đánh giá cũ và khu vực quản trị dùng tài khoản riêng.": "Campaign surveys do not require sign-in. Legacy assessments and administration use separate accounts.",
   "Không tìm thấy trang": "Page not found",
   "Đăng nhập · bản demo": "Sign in · demo",
-  "Dùng bộ chuyển vai trò trên thanh DEMO để xem 4 giao diện. Không có mật khẩu admin hard-code hoặc đăng nhập giả.": "Use the DEMO role selector to preview the four interfaces. There is no hard-coded admin password or fake login.",
+  "Dùng bộ chuyển vai trò ở chân trang để xem 4 giao diện. Không có mật khẩu admin hard-code hoặc đăng nhập giả.": "Use the DEMO role selector to preview the four interfaces. There is no hard-coded admin password or fake login.",
   "CHÀO MỪNG EM ĐẾN VỚI": "WELCOME TO",
   "Dạo này, em thế nào?": "How have you been lately?",
   "Mỗi ngày, em đều có những cảm xúc, suy nghĩ và trải nghiệm khác nhau. Hãy cùng": "Every day brings different feelings, thoughts and experiences. Join",
