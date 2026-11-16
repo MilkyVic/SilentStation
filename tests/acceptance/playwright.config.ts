@@ -1,0 +1,2 @@
+import {defineConfig} from '@playwright/test';
+export default defineConfig({testDir:'.',workers:1,retries:0,timeout:60000,outputDir:'.acceptance/cloud-preview-results',use:{baseURL:process.env.VERCEL_ACCEPTANCE_URL,extraHTTPHeaders:process.env.VERCEL_PROTECTION_BYPASS?{'x-vercel-protection-bypass':process.env.VERCEL_PROTECTION_BYPASS}:undefined,ignoreHTTPSErrors:false,trace:'off',video:'off',screenshot:'off'},projects:[{name:'chromium',use:{browserName:'chromium'}}]});

@@ -1,7 +1,9 @@
+import {accountsEnabled,accountHandler} from '../../server/accounts/http.js';
 import { approveTeacherAccount } from '../../server/auth-core.js';
 import { ensureMethod, getBearerToken, handleApiError, readJsonBody } from '../_lib/handler.js';
 
 export default async function handler(req: any, res: any) {
+ if(accountsEnabled()){const b=readJsonBody(req);req.body=b;req.query={...req.query,id:b.teacherId};return accountHandler(req,res,'approve');}
   if (!ensureMethod(req, res, ['POST'])) return;
 
   try {

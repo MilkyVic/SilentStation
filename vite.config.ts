@@ -7,9 +7,7 @@ export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
     plugins: [react(), tailwindcss()],
-    define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-    },
+    ...(env.VITE_ACCEPTANCE_BANNER==='true'||process.env.VITE_ACCEPTANCE_BANNER==='true'?{define:{'import.meta.env.VITE_AUTH_API_BASE_URL':JSON.stringify('')}}:{}),
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

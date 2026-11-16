@@ -8,7 +8,9 @@ export type AuthAccount = {
   password: string; // Mock only for phase 2. Replace by backend hash in phase 3.
   role: AuthRole;
   status: AuthStatus;
+  revision?:number;
   profile: {
+    schoolId?:string|null;classId?:string|null;bio?:string;avatarKey?:string;emailVerified?:boolean;revision?:number;
     name: string;
     email: string;
     birthYear: string;
@@ -78,7 +80,9 @@ export type AuthApiUser = {
   username: string;
   role: ApiRole;
   status: ApiStatus;
+  revision?:number;
   profile: {
+    schoolId?:string|null;classId?:string|null;bio?:string;avatarKey?:string;emailVerified?:boolean;revision?:number;
     name: string;
     email: string;
     birthYear: string;
@@ -92,8 +96,8 @@ export type AuthApiUser = {
 };
 
 export type AuthApiSession = {
-  tokenType: 'Bearer';
-  accessToken: string;
+  tokenType: 'Bearer' | 'Cookie';
+  accessToken?: string;
   refreshToken?: string;
   expiresAt: string;
 };
@@ -112,7 +116,7 @@ export type AuthApiLoginOtpChallengeResponse = {
   otpRequired: true;
   otpSessionId: string;
   expiresAt: string;
-  delivery: 'gmail' | 'dev_console';
+  delivery: 'gmail' | 'smtp' | 'dev_console';
   maskedEmail: string;
   devOtpCode?: string;
 };
@@ -187,6 +191,6 @@ export type AuthApiRegisterOtpResponse = {
   ok: true;
   otpSessionId: string;
   expiresAt: string;
-  delivery: 'gmail' | 'dev_console';
+  delivery: 'gmail' | 'smtp' | 'dev_console';
   devOtpCode?: string;
 };

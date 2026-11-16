@@ -1,10 +1,11 @@
+import {ui,useLocale} from '../../features/preferences/ui';
 import React, { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import Markdown from 'react-markdown';
 import rehypeRaw from 'rehype-raw';
 import { cn } from '../../lib/utils';
 
-const TooltipWord = ({ word, tooltipText }: { word: React.ReactNode; tooltipText: string }) => {
+const TooltipWord = ({ word, tooltipText }: { word: React.ReactNode; tooltipText: string }) => {useLocale();
   const [show, setShow] = useState(false);
 
   return (
@@ -41,7 +42,7 @@ type HandbookMarkdownProps = {
   content: string;
 };
 
-export default function HandbookMarkdown({ content }: HandbookMarkdownProps) {
+export default function HandbookMarkdown({ content }: HandbookMarkdownProps) {useLocale();
   const markdownComponents = useMemo(() => ({
     img: ({ src, alt, ...props }: any) => {
       let layoutClass = 'mx-auto w-full block clear-both';
@@ -56,6 +57,7 @@ export default function HandbookMarkdown({ content }: HandbookMarkdownProps) {
       }
       return (
         <img
+          loading="lazy" decoding="async"
           src={src}
           alt={alt}
           className={cn('rounded-2xl shadow-md my-12 object-cover border border-gray-100', layoutClass)}

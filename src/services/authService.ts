@@ -1,4 +1,4 @@
-﻿import type {
+import type {
   ApiRole,
   ApiStatus,
   AuthAccount,
@@ -106,106 +106,17 @@ type ServiceResult<T> = {
 type AdminLoginOtpChallenge = {
   otpSessionId: string;
   expiresAt: string;
-  delivery: 'gmail' | 'dev_console';
+  delivery: 'gmail' | 'smtp' | 'dev_console';
   maskedEmail: string;
   devOtpCode?: string;
 };
 
-const AUTH_TOKEN_KEY = 'tram_an_auth_token';
 const AUTH_API_PREFIX = '/api/auth';
 const CLASS_CODE_API_PREFIX = '/api/class-codes';
 const ADMIN_API_PREFIX = '/api/admins';
 const USERS_API_PREFIX = '/api/users';
 
-const TEST_AUTH_ACCOUNTS: AuthAccount[] = [
-  {
-    id: 'acc-student-1',
-    username: 'student_test',
-    password: '123456',
-    role: 'Học sinh',
-    status: 'active',
-    profile: {
-      name: 'Học sinh test',
-      email: 'student_test@tram-an.vn',
-      birthYear: '2008',
-      gender: 'Nữ',
-      school: 'THPT Chuyên Hà Nội - Amsterdam',
-      className: '12A1',
-      teacherType: '',
-      subject: '',
-    },
-  },
-  {
-    id: 'acc-teacher-1',
-    username: 'teacher_test',
-    password: '123456',
-    role: 'Giáo viên',
-    status: 'active',
-    profile: {
-      name: 'Giáo viên test',
-      email: 'teacher_test@tram-an.vn',
-      birthYear: '1988',
-      gender: 'Nam',
-      school: 'THPT Chuyên Hà Nội - Amsterdam',
-      className: '12A1',
-      teacherType: 'homeroom',
-      subject: '',
-    },
-  },
-  {
-    id: 'acc-teacher-subject-1',
-    username: 'teacher_subject_test',
-    password: '123456',
-    role: 'Giáo viên',
-    status: 'active',
-    profile: {
-      name: 'Giao vien bo mon test',
-      email: 'teacher_subject_test@tram-an.vn',
-      birthYear: '1989',
-      gender: 'Nu',
-      school: 'THPT Chuyên Hà Nội - Amsterdam',
-      className: '',
-      teacherType: 'subject',
-      subject: 'toan',
-    },
-  },
-  {
-    id: 'acc-admin-1',
-    username: 'admin_test',
-    password: '123456',
-    role: 'Admin',
-    status: 'active',
-    profile: {
-      name: 'Admin test',
-      email: 'admintraman@gmail.com',
-      birthYear: '1985',
-      gender: 'Nam',
-      school: 'THPT Chuyên Hà Nội - Amsterdam',
-      className: '',
-      teacherType: '',
-      subject: '',
-    },
-  },
-  {
-    id: 'acc-superadmin-1',
-    username: 'superadmin',
-    password: '123456',
-    role: 'Quản trị viên cấp cao',
-    status: 'active',
-    profile: {
-      name: 'Superadmin',
-      email: 'hello.traman@gmail.com',
-      birthYear: '1983',
-      gender: 'Nữ',
-      school: '',
-      className: '',
-      teacherType: '',
-      subject: '',
-    },
-  },
-];
-
-let accounts: AuthAccount[] = [...TEST_AUTH_ACCOUNTS];
+let accounts: AuthAccount[] = [];
 let currentSession: Session | null = null;
 let pendingAdminLoginOtp: AdminLoginOtpChallenge | null = null;
 
@@ -281,8 +192,9 @@ const mapApiUserToAccount = (user: AuthApiUser, password = ''): AuthAccount => {
     username: normalizeUsername(user.username),
     password,
     role,
-    status: mapApiStatusToAuthStatus(user.status),
+    status: mapApiStatusToAuthStatus(user.status),revision:user.revision??0,
     profile: {
+      schoolId:user.profile.schoolId,classId:user.profile.classId,bio:user.profile.bio,avatarKey:user.profile.avatarKey,emailVerified:user.profile.emailVerified,revision:user.revision,
       name: user.profile.name || user.username,
       email: user.profile.email || `${user.username}@tram-an.vn`,
       birthYear: user.profile.birthYear || '',
@@ -328,31 +240,12 @@ const getAuthApiBaseUrl = () => {
   return typeof envBaseUrl === 'string' ? envBaseUrl.trim().replace(/\/$/, '') : '';
 };
 
-const shouldUseLocalFallback = () => {
-  if (!isBrowser()) return true;
-  const env = (import.meta as { env?: Record<string, unknown> }).env || {};
-  const fallbackFlag = env.VITE_ENABLE_AUTH_FALLBACK;
-  if (typeof fallbackFlag === 'string') {
-    return fallbackFlag === 'true';
-  }
-  return env.DEV === true;
-};
+const shouldUseLocalFallback = () => !isBrowser();
 
 const buildAuthApiUrl = (path: string) => `${getAuthApiBaseUrl()}${AUTH_API_PREFIX}${path}`;
 
-const getStoredToken = (): string | null => {
-  if (!isBrowser()) return null;
-  return window.localStorage.getItem(AUTH_TOKEN_KEY);
-};
-
-const setStoredToken = (token: string | null) => {
-  if (!isBrowser()) return;
-  if (!token) {
-    window.localStorage.removeItem(AUTH_TOKEN_KEY);
-    return;
-  }
-  window.localStorage.setItem(AUTH_TOKEN_KEY, token);
-};
+const getStoredToken = (): string | null => null;
+const setStoredToken = (_token: string | null | undefined) => {};
 
 const parseAuthApiResponse = (
   payload: unknown,
@@ -454,10 +347,12 @@ const parseRegisterOtpResponse = (
 
 const callApi = async (url: string, init?: RequestInit): Promise<unknown | null> => {
   if (!isBrowser()) return null;
+  if((import.meta as {env?:Record<string,unknown>}).env?.MODE==='demo')return {ok:false,error:{code:'AUTH_SERVER_ERROR',message:'Demo không gọi API hoặc thực hiện thao tác thật.'}};
 
   try {
     const response = await fetch(url, {
       ...init,
+      credentials: 'include',signal:init?.signal??AbortSignal.timeout(20000),
       headers: {
         'Content-Type': 'application/json',
         ...(init?.headers || {}),
@@ -566,7 +461,7 @@ export const authService = {
   },
 
 
-  async requestRegisterOtp(payload: RegisterOtpRequestPayload): Promise<ServiceResult<{ otpSessionId: string; expiresAt: string; delivery: 'gmail' | 'dev_console'; devOtpCode?: string }>> {
+  async requestRegisterOtp(payload: RegisterOtpRequestPayload): Promise<ServiceResult<{ otpSessionId: string; expiresAt: string; delivery: 'gmail' | 'smtp' | 'dev_console'; devOtpCode?: string }>> {
     const rawPayload = await callAuthApi('/otp/request-register', {
       method: 'POST',
       body: JSON.stringify({
@@ -580,7 +475,7 @@ export const authService = {
 
     const apiResult = parseRegisterOtpResponse(rawPayload);
     if (!apiResult) {
-      return makeError('AUTH_SERVER_ERROR', 'Không kết nối được máy chủ OTP.') as ServiceResult<{ otpSessionId: string; expiresAt: string; delivery: 'gmail' | 'dev_console'; devOtpCode?: string }>;
+      return makeError('AUTH_SERVER_ERROR', 'Không kết nối được máy chủ OTP.') as ServiceResult<{ otpSessionId: string; expiresAt: string; delivery: 'gmail' | 'smtp' | 'dev_console'; devOtpCode?: string }>;
     }
 
     if ('error' in apiResult) {
@@ -621,7 +516,7 @@ export const authService = {
       if (!('user' in apiResult)) {
         return makeError('AUTH_SERVER_ERROR', 'Phản hồi đăng ký học sinh từ máy chủ không hợp lệ.');
       }
-      const account = mapApiUserToAccount(apiResult.user, payload.password);
+      const account = mapApiUserToAccount(apiResult.user);
       upsertLocalAccount(account);
       return { ok: true, account };
     }
@@ -655,7 +550,7 @@ export const authService = {
       if (!('user' in apiResult)) {
         return makeError('AUTH_SERVER_ERROR', 'Phản hồi đăng ký giáo viên từ máy chủ không hợp lệ.');
       }
-      const account = mapApiUserToAccount(apiResult.user, payload.password);
+      const account = mapApiUserToAccount(apiResult.user);
       upsertLocalAccount(account);
       return { ok: true, account };
     }
@@ -672,6 +567,7 @@ export const authService = {
     const apiResult = await callAuthApi('/login', {
       method: 'POST',
       body: JSON.stringify({
+        transport: 'cookie',
         username: normalizeUsername(params.username),
         password: params.password,
       }),
@@ -702,7 +598,7 @@ export const authService = {
       }
 
       setStoredToken(apiResult.session.accessToken);
-      const account = mapApiUserToAccount(apiResult.user, params.password);
+      const account = mapApiUserToAccount(apiResult.user);
       upsertLocalAccount(account);
       currentSession = {
         accountId: account.id,
@@ -736,6 +632,7 @@ export const authService = {
     const apiResult = await callAuthApi('/login', {
       method: 'POST',
       body: JSON.stringify({
+        transport: 'cookie',
         otpSessionId: pending.otpSessionId,
         otpCode: otpCode.trim(),
       }),
@@ -765,29 +662,20 @@ export const authService = {
   },
 
   async logout(): Promise<void> {
-    const token = getStoredToken();
+    if(isBrowser()){
+      const response=await callAuthApi('/logout',{method:'POST'});
+      if(!response?.ok)throw new Error('Không xác nhận đăng xuất trên backend. Vui lòng thử lại; không dùng máy chung khi phiên chưa kết thúc.');
+    }
+    setStoredToken(null);currentSession=null;pendingAdminLoginOtp=null;
 
-    setStoredToken(null);
-    currentSession = null;
-    pendingAdminLoginOtp = null;
-
-    if (!token) return;
-
-    await callAuthApi('/logout', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
   },
 
   async getCurrentSession(): Promise<AuthAccount | null> {
     const token = getStoredToken();
-    if (token) {
+    if (isBrowser()) {
       const apiResult = await callAuthApi('/me', {
         method: 'GET',
         headers: {
-          Authorization: `Bearer ${token}`,
         },
       });
 
@@ -822,14 +710,13 @@ export const authService = {
     payload: CreateClassJoinCodePayload = {},
   ): Promise<ServiceResult<{ code: string; info: ClassJoinCodeInfo }>> {
     const token = getStoredToken();
-    if (!token) {
+    if (!isBrowser()) {
       return makeError('AUTH_INVALID_CREDENTIALS', 'Phiên đăng nhập không hợp lệ.') as ServiceResult<{ code: string; info: ClassJoinCodeInfo }>;
     }
 
     const rawPayload = await callClassCodeApi('/create', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(payload),
     });
@@ -854,14 +741,13 @@ export const authService = {
 
   async listActiveClassJoinCodes(): Promise<ServiceResult<ClassJoinCodeInfo[]>> {
     const token = getStoredToken();
-    if (!token) {
+    if (!isBrowser()) {
       return makeError('AUTH_INVALID_CREDENTIALS', 'Phiên đăng nhập không hợp lệ.') as ServiceResult<ClassJoinCodeInfo[]>;
     }
 
     const rawPayload = await callClassCodeApi('/active', {
       method: 'GET',
       headers: {
-        Authorization: `Bearer ${token}`,
       },
     });
 
@@ -882,14 +768,13 @@ export const authService = {
 
   async listClassJoinCodeEvents(limit = 50): Promise<ServiceResult<ClassJoinCodeEventInfo[]>> {
     const token = getStoredToken();
-    if (!token) {
+    if (!isBrowser()) {
       return makeError('AUTH_INVALID_CREDENTIALS', 'Phiên đăng nhập không hợp lệ.') as ServiceResult<ClassJoinCodeEventInfo[]>;
     }
 
     const rawPayload = await callClassCodeApi(`/events?limit=${Math.min(Math.max(limit, 1), 200)}`, {
       method: 'GET',
       headers: {
-        Authorization: `Bearer ${token}`,
       },
     });
 
@@ -909,14 +794,13 @@ export const authService = {
   },
   async revokeClassJoinCode(id: string): Promise<ServiceResult<ClassJoinCodeInfo>> {
     const token = getStoredToken();
-    if (!token) {
+    if (!isBrowser()) {
       return makeError('AUTH_INVALID_CREDENTIALS', 'Phiên đăng nhập không hợp lệ.') as ServiceResult<ClassJoinCodeInfo>;
     }
 
     const rawPayload = await callClassCodeApi('/revoke', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ id }),
     });
@@ -938,14 +822,13 @@ export const authService = {
 
   async listAdmins(): Promise<ServiceResult<AuthAccount[]>> {
     const token = getStoredToken();
-    if (!token) {
+    if (!isBrowser()) {
       return makeError('AUTH_INVALID_CREDENTIALS', 'Phiên đăng nhập không hợp lệ.') as ServiceResult<AuthAccount[]>;
     }
 
     const payload = await callAdminApi('', {
       method: 'GET',
       headers: {
-        Authorization: `Bearer ${token}`,
       },
     });
 
@@ -984,7 +867,7 @@ export const authService = {
     limit?: number;
   } = {}): Promise<ServiceResult<AuthAccount[]>> {
     const token = getStoredToken();
-    if (!token) {
+    if (!isBrowser()) {
       return makeError('AUTH_INVALID_CREDENTIALS', 'Phiên đăng nhập không hợp lệ.') as ServiceResult<AuthAccount[]>;
     }
 
@@ -992,13 +875,12 @@ export const authService = {
     if (query.role) params.set('role', query.role);
     if (query.school) params.set('school', query.school);
     if (query.className) params.set('className', query.className);
-    if (typeof query.limit === 'number') params.set('limit', String(query.limit));
+    params.set('limit','200');
 
     const suffix = params.toString() ? `?${params.toString()}` : '';
     const payload = await callUsersApi(suffix, {
       method: 'GET',
       headers: {
-        Authorization: `Bearer ${token}`,
       },
     });
 
@@ -1020,10 +902,16 @@ export const authService = {
       };
     }
 
-    const users = Array.isArray(result.users)
-      ? result.users.map((item) => mapApiUserToAccount(item))
-      : [];
-
+    const users = Array.isArray(result.users) ? result.users.map(item=>mapApiUserToAccount(item)) : [];
+    let cursor=(result as AuthApiUsersListResponse & {nextCursor?:string|null}).nextCursor;
+    let pages=0;
+    while(cursor){
+      if(++pages>50)return makeError('AUTH_SERVER_ERROR','Danh sách quá lớn; cần lọc theo trường/lớp.') as ServiceResult<AuthAccount[]>;
+      params.set('cursor',cursor);
+      const next=await callUsersApi(`?${params.toString()}`,{method:'GET'}) as AuthApiUsersListResponse & {nextCursor?:string|null};
+      if(!next?.ok||!Array.isArray(next.users))return makeError('AUTH_SERVER_ERROR','Không tải đủ danh sách; không hiển thị tổng giả.') as ServiceResult<AuthAccount[]>;
+      users.push(...next.users.map(item=>mapApiUserToAccount(item)));cursor=next.nextCursor;
+    }
     users.forEach(upsertLocalAccount);
     return { ok: true, data: users };
   },
@@ -1035,14 +923,13 @@ export const authService = {
     }
 
     const token = getStoredToken();
-    if (!token) {
+    if (!isBrowser()) {
       return makeError('AUTH_INVALID_CREDENTIALS', 'Phiên đăng nhập không hợp lệ.') as ServiceResult<AuthAccount>;
     }
 
     const payload = await callUsersApi('/approve-teacher', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ teacherId: normalizedTeacherId }),
     });
@@ -1096,14 +983,13 @@ export const authService = {
     }
 
     const token = getStoredToken();
-    if (!token) {
+    if (!isBrowser()) {
       return makeError('AUTH_INVALID_CREDENTIALS', 'Phiên đăng nhập không hợp lệ.') as ServiceResult<{ teacherId: string }>;
     }
 
     const payload = await callUsersApi('/reject-teacher', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify({ teacherId: normalizedTeacherId }),
     });
@@ -1162,14 +1048,13 @@ export const authService = {
     };
   }): Promise<ServiceResult<AuthAccount>> {
     const token = getStoredToken();
-    if (!token) {
+    if (!isBrowser()) {
       return makeError('AUTH_INVALID_CREDENTIALS', 'Phiên đăng nhập không hợp lệ.') as ServiceResult<AuthAccount>;
     }
 
     const response = await callAdminApi('', {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(payload),
     });
@@ -1194,7 +1079,7 @@ export const authService = {
       };
     }
 
-    const account = mapApiUserToAccount(result.admin, payload.password);
+    const account = mapApiUserToAccount(result.admin);
     upsertLocalAccount(account);
     return { ok: true, data: account };
   },
@@ -1226,8 +1111,8 @@ export const authService = {
   },
 
   // Test-only helper to keep authService unit tests deterministic.
-  __resetForTests(): void {
-    accounts = [...TEST_AUTH_ACCOUNTS];
+  __resetForTests(seeds: AuthAccount[] = []): void {
+    accounts = [...seeds];
     currentSession = null;
     pendingAdminLoginOtp = null;
     setStoredToken(null);

@@ -1,3 +1,4 @@
+import {ui,useLocale} from '../../features/preferences/ui';
 import React, { useEffect } from 'react';
 import { motion } from 'motion/react';
 import HandbookSidebar from './HandbookSidebar';
@@ -43,7 +44,7 @@ export default function HandbookView({
   userRole,
   onNavigateToTestList,
   onNavigateToAuth,
-}: HandbookViewProps) {
+}: HandbookViewProps) {useLocale();
   useEffect(() => {
     if (filteredSections.length === 0) return;
     if (!filteredSections.some((section) => section.id === activeSectionId)) {

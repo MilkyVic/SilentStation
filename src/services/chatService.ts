@@ -1,4 +1,4 @@
-﻿import type { ChatApiErrorResponse, ChatApiSuccessResponse } from '../types/chat';
+import type { ChatApiErrorResponse, ChatApiSuccessResponse } from '../types/chat';
 
 type ChatSendResult = {
   ok: true;
@@ -30,20 +30,9 @@ const getSessionStorageKey = (owner?: string) => (
   `${CHAT_SESSION_STORAGE_KEY_PREFIX}:${normalizeChatOwner(owner)}`
 );
 
-const getSessionId = () => {
-  if (typeof window === 'undefined') return '';
-  const storageKey = getSessionStorageKey(activeChatOwner);
-  const existing = window.localStorage.getItem(storageKey);
-  if (existing) return existing;
-  const generated = `chat-${Math.random().toString(36).slice(2, 10)}-${Date.now()}`;
-  window.localStorage.setItem(storageKey, generated);
-  return generated;
-};
-
-const setSessionId = (sessionId: string) => {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(getSessionStorageKey(activeChatOwner), sessionId);
-};
+let sessionIdInMemory='';
+const getSessionId=()=>sessionIdInMemory;
+const setSessionId=(id:string)=>{sessionIdInMemory=id;};
 
 const parseChatResponse = (
   payload: unknown,
@@ -58,12 +47,14 @@ export const chatService = {
   setActiveOwner(owner: string, resetSession = false) {
     activeChatOwner = normalizeChatOwner(owner);
     if (!resetSession || typeof window === 'undefined') return;
-    window.localStorage.removeItem(getSessionStorageKey(activeChatOwner));
+    sessionIdInMemory='';
   },
   async sendMessage(message: string): Promise<ChatSendResult> {
+    if((import.meta as {env?:Record<string,unknown>}).env?.MODE==='demo')return {ok:false,error:{code:'DEMO_MODE',message:'Demo không gọi chatbot backend hoặc gửi dữ liệu đến Gemini.'}};
     try {
       const response = await fetch('/api/chat/send', {
         method: 'POST',
+        credentials:'include',signal:AbortSignal.timeout(20000),
         headers: {
           'Content-Type': 'application/json',
         },

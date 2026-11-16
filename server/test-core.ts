@@ -1,8 +1,14 @@
+import {snapshotOverview} from './accounts/reports.js';
+import {TEST_ICONS,TEST_COLORS} from '../shared/accounts.js';
 import crypto from 'node:crypto';
+import {legacyArithmetic,LEGACY_SCORE_VERSION} from './test-scoring/legacy-arithmetic.js';
+import {validateQuestionList,replaceQuestions,appendVersion} from './test-template-store.js';
+import {assertEditor,assertTestAccess,currentVersion,definitionOf,digestRequired,draftIdentity,expectedVersion,receiptOf,validateSelections} from './test-definitions.js';
+import {validateSessionSecret} from './runtime-config.js';
+import {decryptDraft} from './surveys/draft-crypto.js';
 import { Pool } from 'pg';
+import { databaseConfig } from './runtime-config.js';
 import { AuthHttpError, getCurrentUser, initializeAuthCore } from './auth-core.js';
-import { scoreDass21, scoreGad7, scorePhq9, shouldSuggestDass21ByCoreTest } from './test-scoring/engine.js';
-import { SYSTEM_TEMPLATE_QUESTIONS, type SeedQuestion } from './test-question-bank.js';
 
 type TestAudience = 'student' | 'teacher' | 'both';
 type TemplateCode = 'PHQ9' | 'GAD7' | 'SDQ25' | 'MT' | 'DASS21' | 'MBI22' | 'CUSTOM';
@@ -30,237 +36,7 @@ const DATABASE_URL = process.env.DATABASE_URL;
 let pool: Pool | null = null;
 let initialized = false;
 
-const getPool = () => {
-  if (!DATABASE_URL) {
-    throw new AuthHttpError(500, 'AUTH_SERVER_ERROR', 'Thieu bien moi truong DATABASE_URL.');
-  }
-  if (pool) return pool;
-  pool = new Pool({
-    connectionString: DATABASE_URL,
-    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-  });
-  return pool;
-};
-
-const testSchemaSql = `
-CREATE TABLE IF NOT EXISTS test_templates (
-  id TEXT PRIMARY KEY,
-  title TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  target_audience TEXT NOT NULL CHECK (target_audience IN ('student', 'teacher', 'both')),
-  template_code TEXT NOT NULL DEFAULT 'CUSTOM',
-  is_system BOOLEAN NOT NULL DEFAULT FALSE,
-  is_active BOOLEAN NOT NULL DEFAULT TRUE,
-  display_order INTEGER NOT NULL DEFAULT 100,
-  created_by_user_id TEXT NULL REFERENCES auth_users(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_test_templates_active ON test_templates (is_active, display_order);
-
-CREATE TABLE IF NOT EXISTS test_attempts (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
-  template_id TEXT NOT NULL REFERENCES test_templates(id) ON DELETE CASCADE,
-  user_role TEXT NOT NULL CHECK (user_role IN ('student', 'teacher', 'admin', 'superadmin')),
-  score_total INTEGER NOT NULL DEFAULT 0,
-  score_level TEXT NOT NULL DEFAULT '',
-  score_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-  answers JSONB NOT NULL DEFAULT '[]'::jsonb,
-  suggest_dass21 BOOLEAN NOT NULL DEFAULT FALSE,
-  submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_test_attempts_user_time ON test_attempts (user_id, submitted_at DESC);
-CREATE INDEX IF NOT EXISTS idx_test_attempts_template_time ON test_attempts (template_id, submitted_at DESC);
-
-CREATE TABLE IF NOT EXISTS test_questions (
-  id TEXT PRIMARY KEY,
-  template_id TEXT NOT NULL REFERENCES test_templates(id) ON DELETE CASCADE,
-  question_order INTEGER NOT NULL CHECK (question_order > 0),
-  content TEXT NOT NULL,
-  subscale TEXT NOT NULL DEFAULT '',
-  is_reverse BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (template_id, question_order)
-);
-
-CREATE INDEX IF NOT EXISTS idx_test_questions_template_order ON test_questions (template_id, question_order);
-
-CREATE TABLE IF NOT EXISTS test_options (
-  id TEXT PRIMARY KEY,
-  question_id TEXT NOT NULL REFERENCES test_questions(id) ON DELETE CASCADE,
-  option_order INTEGER NOT NULL CHECK (option_order > 0),
-  label TEXT NOT NULL,
-  score INTEGER NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (question_id, option_order)
-);
-
-CREATE INDEX IF NOT EXISTS idx_test_options_question_order ON test_options (question_id, option_order);
-
-CREATE TABLE IF NOT EXISTS test_template_versions (
-  id TEXT PRIMARY KEY,
-  template_id TEXT NOT NULL,
-  version_number INTEGER NOT NULL,
-  action TEXT NOT NULL CHECK (action IN ('create', 'update', 'publish', 'unpublish', 'delete')),
-  actor_user_id TEXT NULL REFERENCES auth_users(id) ON DELETE SET NULL,
-  snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (template_id, version_number)
-);
-
-CREATE INDEX IF NOT EXISTS idx_test_template_versions_template ON test_template_versions (template_id, version_number DESC);
-`;
-
-const CORE_TEMPLATES: TestTemplate[] = [
-  {
-    id: '1',
-    title: 'Bai test PHQ-9',
-    description: 'Danh gia muc do tram cam.',
-    targetAudience: 'student',
-    templateCode: 'PHQ9',
-    isSystem: true,
-    isActive: true,
-    displayOrder: 1,
-  },
-  {
-    id: '2',
-    title: 'Bai test GAD-7',
-    description: 'Danh gia muc do lo au.',
-    targetAudience: 'student',
-    templateCode: 'GAD7',
-    isSystem: true,
-    isActive: true,
-    displayOrder: 2,
-  },
-  {
-    id: '3',
-    title: 'Bai test SDQ-25',
-    description: 'Bang hoi diem manh va diem yeu.',
-    targetAudience: 'student',
-    templateCode: 'SDQ25',
-    isSystem: true,
-    isActive: true,
-    displayOrder: 3,
-  },
-  {
-    id: '4',
-    title: 'Bai test Moi truong hoc duong',
-    description: 'Danh gia moi truong hoc duong than thien suc khoe tam than.',
-    targetAudience: 'student',
-    templateCode: 'MT',
-    isSystem: true,
-    isActive: true,
-    displayOrder: 4,
-  },
-  {
-    id: '5',
-    title: 'Bai test DASS-21',
-    description: 'Danh gia muc do stress, lo au, tram cam.',
-    targetAudience: 'both',
-    templateCode: 'DASS21',
-    isSystem: true,
-    isActive: true,
-    displayOrder: 5,
-  },
-  {
-    id: '6',
-    title: 'Bai test MBI-22',
-    description: 'Danh gia kiet suc nghe nghiep cho giao vien.',
-    targetAudience: 'teacher',
-    templateCode: 'MBI22',
-    isSystem: true,
-    isActive: true,
-    displayOrder: 6,
-  },
-];
-
-const buildSeedQuestionId = (templateId: string, order: number) => `${templateId}-q${order}`;
-const buildSeedOptionId = (questionId: string, order: number) => `${questionId}-o${order}`;
-
-const seedTemplateQuestions = async (templateId: string, questions: SeedQuestion[]) => {
-  const usedQuestionIds: string[] = [];
-  const usedOptionIds: string[] = [];
-
-  for (const item of questions) {
-    const questionId = buildSeedQuestionId(templateId, item.order);
-    usedQuestionIds.push(questionId);
-
-    await getPool().query(`
-      INSERT INTO test_questions (
-        id, template_id, question_order, content, subscale, is_reverse
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        template_id = EXCLUDED.template_id,
-        question_order = EXCLUDED.question_order,
-        content = EXCLUDED.content,
-        subscale = EXCLUDED.subscale,
-        is_reverse = EXCLUDED.is_reverse,
-        updated_at = NOW()
-    `, [
-      questionId,
-      templateId,
-      item.order,
-      item.text,
-      item.subscale || '',
-      Boolean(item.isReverse),
-    ]);
-
-    for (const option of item.options) {
-      const optionId = buildSeedOptionId(questionId, option.order);
-      usedOptionIds.push(optionId);
-
-      await getPool().query(`
-        INSERT INTO test_options (
-          id, question_id, option_order, label, score
-        ) VALUES (
-          $1, $2, $3, $4, $5
-        )
-        ON CONFLICT (id) DO UPDATE SET
-          question_id = EXCLUDED.question_id,
-          option_order = EXCLUDED.option_order,
-          label = EXCLUDED.label,
-          score = EXCLUDED.score,
-          updated_at = NOW()
-      `, [
-        optionId,
-        questionId,
-        option.order,
-        option.label,
-        option.score,
-      ]);
-    }
-  }
-
-  await getPool().query(`
-    DELETE FROM test_options o
-    USING test_questions q
-    WHERE o.question_id = q.id
-      AND q.template_id = $1
-      AND NOT (o.id = ANY($2::text[]))
-  `, [templateId, usedOptionIds]);
-
-  await getPool().query(`
-    DELETE FROM test_questions
-    WHERE template_id = $1
-      AND NOT (id = ANY($2::text[]))
-  `, [templateId, usedQuestionIds]);
-};
-
-const seedSystemTemplateQuestions = async () => {
-  for (const template of CORE_TEMPLATES) {
-    if (!template.isSystem) continue;
-    const questions = SYSTEM_TEMPLATE_QUESTIONS[template.id];
-    if (!questions || questions.length === 0) continue;
-    await seedTemplateQuestions(template.id, questions);
-  }
-};
+const getPool = () => pool ??= new Pool(databaseConfig());
 
 const mapTemplateRow = (row: Record<string, any>) => ({
   id: row.id,
@@ -270,7 +46,7 @@ const mapTemplateRow = (row: Record<string, any>) => ({
   templateCode: row.template_code,
   isSystem: row.is_system,
   isActive: row.is_active,
-  displayOrder: row.display_order,
+  displayOrder: row.display_order,durationMinutes:row.duration_minutes,iconKey:row.icon_key,colorKey:row.color_key,
   questionCount: Number(row.question_count || 0),
   createdByUserId: row.created_by_user_id || null,
   createdAt: row.created_at,
@@ -290,49 +66,9 @@ const clampInt = (value: unknown, fallback: number, min: number, max: number) =>
   return parsed;
 };
 
-const scoreByTemplate = (templateId: string, templateCode: string, answers: number[], fallbackScore?: number) => {
-  const code = String(templateCode || '').toUpperCase();
-
-  if (code === 'PHQ9') {
-    if (!answers.length) throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'PHQ-9 can du dap an de cham diem.');
-    const result = scorePhq9(answers);
-    return {
-      scoreTotal: result.total,
-      scoreLevel: result.level,
-      scorePayload: result,
-      suggestDass21: shouldSuggestDass21ByCoreTest(templateId, result.total),
-    };
-  }
-
-  if (code === 'GAD7') {
-    if (!answers.length) throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'GAD-7 can du dap an de cham diem.');
-    const result = scoreGad7(answers);
-    return {
-      scoreTotal: result.total,
-      scoreLevel: result.level,
-      scorePayload: result,
-      suggestDass21: shouldSuggestDass21ByCoreTest(templateId, result.total),
-    };
-  }
-
-  if (code === 'DASS21') {
-    if (!answers.length) throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'DASS-21 can du dap an de cham diem.');
-    const result = scoreDass21(answers);
-    return {
-      scoreTotal: result.stress.score + result.anxiety.score + result.depression.score,
-      scoreLevel: 'Đã chấm 3 thang',
-      scorePayload: result,
-      suggestDass21: false,
-    };
-  }
-
-  const scoreTotal = Number.isFinite(Number(fallbackScore)) ? Number(fallbackScore) : answers.reduce((sum, value) => sum + value, 0);
-  return {
-    scoreTotal,
-    scoreLevel: 'Đã hoàn thành',
-    scorePayload: { total: scoreTotal },
-    suggestDass21: shouldSuggestDass21ByCoreTest(templateId, scoreTotal),
-  };
+const scoreByTemplate = (_templateId: string,templateCode:string,answers:number[]) => {
+ const result=legacyArithmetic(templateCode,answers);
+ return {scoreTotal:result.total,scoreLevel:'Chưa duyệt diễn giải',scorePayload:{...result,scoreVersion:LEGACY_SCORE_VERSION,interpretationApproved:false},suggestDass21:false};
 };
 
 const ensureTemplateWritePermission = (userRole: string, isSystem: boolean) => {
@@ -393,44 +129,8 @@ const appendTemplateVersion = async (
 };
 
 export const initializeTestCore = async () => {
-  if (initialized) return;
-
-  await initializeAuthCore();
-  await getPool().query(testSchemaSql);
-
-  for (const template of CORE_TEMPLATES) {
-    await getPool().query(`
-      INSERT INTO test_templates (
-        id, title, description, target_audience, template_code, is_system, is_active, display_order
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8
-      )
-      ON CONFLICT (id) DO UPDATE SET
-        title = EXCLUDED.title,
-        description = EXCLUDED.description,
-        target_audience = EXCLUDED.target_audience,
-        template_code = EXCLUDED.template_code,
-        is_system = EXCLUDED.is_system,
-        is_active = EXCLUDED.is_active,
-        display_order = EXCLUDED.display_order,
-        updated_at = NOW()
-    `, [
-      template.id,
-      template.title,
-      template.description,
-      template.targetAudience,
-      template.templateCode,
-      template.isSystem,
-      template.isActive,
-      template.displayOrder,
-    ]);
-  }
-
-  await seedSystemTemplateQuestions();
-
-  initialized = true;
+  if (!initialized) { await initializeAuthCore(); await getPool().query('SELECT 1 FROM test_templates LIMIT 0'); initialized = true; }
 };
-
 export const listTestCatalog = async (token: string | null) => {
   await initializeTestCore();
   const user = await getCurrentUser(token);
@@ -456,7 +156,7 @@ export const listTestCatalog = async (token: string | null) => {
       FROM test_questions
       GROUP BY template_id
     ) q ON q.template_id = t.id
-    WHERE t.is_active = TRUE
+    WHERE t.archived_at IS NULL AND t.is_active = TRUE
       AND t.target_audience = ANY($1::text[])
     ORDER BY t.display_order ASC, t.created_at ASC
   `, [audiences]);
@@ -488,7 +188,7 @@ export const listManageTestTemplates = async (token: string | null) => {
       t.created_at,
       t.updated_at,
       COALESCE(q.question_count, 0)::int AS question_count,
-      COALESCE(v.version_count, 0) AS version_count,
+      COALESCE(v.version_count, 0) AS version_count, COALESCE(v.current_version,0) AS current_version,
       v.last_version_at
     FROM test_templates t
     LEFT JOIN (
@@ -499,11 +199,12 @@ export const listManageTestTemplates = async (token: string | null) => {
     LEFT JOIN (
       SELECT
         template_id,
-        COUNT(*)::int AS version_count,
+        COUNT(*)::int AS version_count, MAX(version_number) AS current_version,
         MAX(created_at) AS last_version_at
       FROM test_template_versions
       GROUP BY template_id
     ) v ON v.template_id = t.id
+    WHERE t.archived_at IS NULL
     ORDER BY t.display_order ASC, t.created_at ASC
   `);
 
@@ -511,7 +212,7 @@ export const listManageTestTemplates = async (token: string | null) => {
     userRole: user.role,
     templates: rows.rows.map((row) => ({
       ...mapTemplateRow(row),
-      versionCount: Number(row.version_count || 0),
+      versionCount: Number(row.version_count || 0), currentVersion:Number(row.current_version||0),
       lastVersionAt: row.last_version_at || null,
     })),
   };
@@ -574,175 +275,38 @@ export const listTemplateVersions = async (token: string | null, templateId: str
   };
 };
 
-export const getTestTemplateDetail = async (token: string | null, templateId: string) => {
-  await initializeTestCore();
-  const user = await getCurrentUser(token);
-  const id = String(templateId || '').trim();
-  if (!id) {
-    throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Thieu templateId.');
-  }
-
-  const templateResult = await getPool().query(`
-    SELECT id, title, description, target_audience, template_code, is_system, is_active, display_order, created_at, updated_at
-    FROM test_templates
-    WHERE id = $1
-    LIMIT 1
-  `, [id]);
-
-  if (templateResult.rows.length === 0) {
-    throw new AuthHttpError(404, 'AUTH_SERVER_ERROR', 'Khong tim thay bai test.');
-  }
-
-  const template = mapTemplateRow(templateResult.rows[0]);
-  if (!template.isActive) {
-    throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Bai test dang tam dong.');
-  }
-
-  const audiences = getAudiencesByRole(user.role);
-  if (!audiences.includes(template.targetAudience)) {
-    throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Ban khong co quyen truy cap bai test nay.');
-  }
-
-  const questionRows = await getPool().query(`
-    SELECT
-      q.id AS question_id,
-      q.question_order,
-      q.content,
-      q.subscale,
-      q.is_reverse,
-      o.id AS option_id,
-      o.option_order,
-      o.label,
-      o.score
-    FROM test_questions q
-    LEFT JOIN test_options o ON o.question_id = q.id
-    WHERE q.template_id = $1
-    ORDER BY q.question_order ASC, o.option_order ASC
-  `, [id]);
-
-  const questionMap = new Map<string, {
-    id: string;
-    order: number;
-    text: string;
-    subscale: string;
-    isReverse: boolean;
-    options: Array<{ id: string; order: number; text: string; score: number }>;
-  }>();
-
-  for (const row of questionRows.rows) {
-    const questionId = String(row.question_id || '').trim();
-    if (!questionId) continue;
-
-    if (!questionMap.has(questionId)) {
-      questionMap.set(questionId, {
-        id: questionId,
-        order: Number(row.question_order || 0),
-        text: String(row.content || ''),
-        subscale: String(row.subscale || ''),
-        isReverse: Boolean(row.is_reverse),
-        options: [],
-      });
-    }
-
-    if (row.option_id) {
-      questionMap.get(questionId)?.options.push({
-        id: String(row.option_id),
-        order: Number(row.option_order || 0),
-        text: String(row.label || ''),
-        score: Number(row.score || 0),
-      });
-    }
-  }
-
-  const questionList = Array.from(questionMap.values())
-    .sort((a, b) => a.order - b.order)
-    .map((question) => ({
-      id: question.id,
-      text: question.text,
-      subscale: question.subscale,
-      isReverse: question.isReverse,
-      options: question.options
-        .sort((a, b) => a.order - b.order)
-        .map((option) => ({
-          id: option.id,
-          text: option.text,
-          score: option.score,
-        })),
-    }));
-
-  return {
-    template: {
-      ...template,
-      questionCount: questionList.length,
-    },
-    questionList,
-  };
-};
-
-export const submitTestResult = async (token: string | null, payload: unknown) => {
-  await initializeTestCore();
-  const user = await getCurrentUser(token);
-
-  const body = (payload && typeof payload === 'object') ? payload as Record<string, unknown> : {};
-  const templateId = String(body.templateId || '').trim();
-  if (!templateId) {
-    throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Thieu templateId.');
-  }
-
-  const templateResult = await getPool().query(`
-    SELECT id, title, description, target_audience, template_code, is_system, is_active, display_order
-    FROM test_templates
-    WHERE id = $1
-    LIMIT 1
-  `, [templateId]);
-  if (templateResult.rows.length === 0) {
-    throw new AuthHttpError(404, 'AUTH_SERVER_ERROR', 'Khong tim thay bai test.');
-  }
-
-  const template = templateResult.rows[0];
-  const audiences = getAudiencesByRole(user.role);
-  if (!audiences.includes(String(template.target_audience || '') as TestAudience)) {
-    throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Ban khong co quyen nop bai test nay.');
-  }
-  if (!template.is_active) {
-    throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Bai test dang tam dong.');
-  }
-
-  const answers = sanitizeAnswers(body.answers);
-  const scoreData = scoreByTemplate(
-    templateId,
-    String(template.template_code || ''),
-    answers,
-    Number(body.score),
-  );
-
-  const attemptId = `ta-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
-  await getPool().query(`
-    INSERT INTO test_attempts (
-      id, user_id, template_id, user_role, score_total, score_level, score_payload, answers, suggest_dass21
-    ) VALUES (
-      $1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9
-    )
-  `, [
-    attemptId,
-    user.id,
-    templateId,
-    user.role,
-    scoreData.scoreTotal,
-    scoreData.scoreLevel,
-    JSON.stringify(scoreData.scorePayload),
-    JSON.stringify(answers),
-    scoreData.suggestDass21,
-  ]);
-
-  return {
-    attemptId,
-    template: mapTemplateRow(template),
-    scoreTotal: scoreData.scoreTotal,
-    scoreLevel: scoreData.scoreLevel,
-    scorePayload: scoreData.scorePayload,
-    suggestDass21: scoreData.suggestDass21,
-  };
+async function readTemplate(token:string|null,id:string,management:boolean){
+ await initializeTestCore();const user=await getCurrentUser(token),client=await getPool().connect();
+ try{await client.query('BEGIN');const row=(await client.query('SELECT * FROM test_templates WHERE id=$1 AND archived_at IS NULL FOR SHARE',[id])).rows[0];
+  if(!row)throw new AuthHttpError(404,'TEST_NOT_FOUND','Không tìm thấy bài test.');if(management)assertEditor(user,row);else assertTestAccess(user,row);
+  const def=await definitionOf(client,row);await client.query('COMMIT');
+  return {template:{...mapTemplateRow(row),questionCount:def.questionList.length,currentVersion:def.currentVersion},definitionDigest:def.definitionDigest,questionList:management?def.questionList:def.questionList.map(q=>({id:q.id,text:q.text,options:q.options.map(o=>({id:o.id,text:o.text}))}))};
+ }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
+}
+export const getTestTemplateDetail=(token:string|null,id:string)=>readTemplate(token,id,false);
+export const getManageTestTemplateDetail=(token:string|null,id:string)=>readTemplate(token,id,true);
+export const submitTestResult=async(token:string|null,payload:unknown)=>{
+ await initializeTestCore();const user=await getCurrentUser(token),b=(payload&&typeof payload==='object'?payload:{}) as any;
+ const id=String(b.templateId||''),draftId=draftIdentity(b.draftId),digest=digestRequired(b.definitionDigest);
+ if(!Number.isInteger(b.revision)||b.revision<0)throw new AuthHttpError(400,'TEST_INVALID','Revision không hợp lệ.');
+ const client=await getPool().connect();try{
+  await client.query('BEGIN');await client.query('SELECT id FROM auth_users WHERE id=$1 FOR SHARE',[user.id]);await getCurrentUser(token);const row=(await client.query('SELECT * FROM test_templates WHERE id=$1 FOR SHARE',[id])).rows[0];
+  // Serialise retry with the same row lock as saving/deleting this user's round.
+  const draft=(await client.query('SELECT * FROM legacy_test_drafts WHERE user_id=$1 AND template_id=$2 FOR UPDATE',[user.id,id])).rows[0];
+  const prior=(await client.query('SELECT * FROM test_attempts WHERE draft_id=$1 AND user_id=$2 AND template_id=$3',[draftId,user.id,id])).rows[0];
+  if(prior){await client.query('COMMIT');return {...receiptOf(prior),replayed:true};}
+  assertTestAccess(user,row);const def=await definitionOf(client,row);
+  if(digest!==def.definitionDigest||draft?.definition_digest!==digest)throw new AuthHttpError(409,'TEST_VERSION_CHANGED','Bank câu hỏi đã đổi hoặc nháp cũ chưa có version. Xác nhận bắt đầu lại.');
+  if(!draft||draft.draft_id!==draftId||draft.revision!==b.revision||draft.submitted_at)throw new AuthHttpError(409,'TEST_DRAFT_CONFLICT','Nháp đã thay đổi hoặc đã nộp ở tab khác.');
+  if(new Date(draft.expires_at).getTime()<=Date.now())throw new AuthHttpError(401,'TEST_DRAFT_EXPIRED','Nháp đã hết hạn 24 giờ.');
+  const selected=validateSelections(b.answers,def.questionList,true),stored=validateSelections(decryptDraft(draft.answers,validateSessionSecret(),id,`${user.id}:${draftId}`),def.questionList,true);
+  if(def.questionList.some(q=>stored[q.id]!==selected[q.id]))throw new AuthHttpError(409,'TEST_DRAFT_CONFLICT','Đáp án cuối chưa được lưu.');
+  const context=(await client.query('SELECT s.id AS school_id,s.name AS school,c.id AS class_id,c.name AS class_name,c.academic_year FROM auth_users u JOIN org_schools s ON s.id=u.school_id LEFT JOIN org_classes c ON c.id=u.class_id WHERE u.id=$1',[user.id])).rows[0];
+  const scores=def.questionList.map(q=>q.options.find(o=>o.id===stored[q.id])!.score!),scoreData=scoreByTemplate(id,row.template_code,scores),attemptId=`ta-${crypto.randomUUID()}`;
+  await client.query('INSERT INTO test_attempts(id,user_id,template_id,user_role,score_total,score_level,score_payload,answers,suggest_dass21,score_version,template_snapshot,draft_id,definition_digest,answer_options) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11::jsonb,$12,$13,$14::jsonb)',[attemptId,user.id,id,user.role,scoreData.scoreTotal,scoreData.scoreLevel,JSON.stringify(scoreData.scorePayload),JSON.stringify(scores),scoreData.suggestDass21,LEGACY_SCORE_VERSION,JSON.stringify(def.snapshot),draftId,digest,JSON.stringify(stored)]);
+  if(context)await client.query("UPDATE test_attempts SET context_status='snapshot',context_school_id=$2,context_class_id=$3,context_snapshot=$4::jsonb WHERE id=$1",[attemptId,context.school_id,context.class_id,JSON.stringify({school:context.school,className:context.class_name??'',academicYear:context.academic_year??''})]);
+  await client.query("UPDATE legacy_test_drafts SET submitted_at=NOW(),answers='{}'::jsonb WHERE user_id=$1 AND template_id=$2",[user.id,id]);await client.query('COMMIT');return {attemptId,...scoreData};
+ }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
 };
 
 export const listMyTestResults = async (token: string | null) => {
@@ -753,12 +317,12 @@ export const listMyTestResults = async (token: string | null) => {
     SELECT
       ta.id,
       ta.template_id,
-      tt.title AS template_title,
+      COALESCE(NULLIF(ta.template_snapshot->>'title',''),tt.title) AS template_title,
       ta.score_total,
       ta.score_level,
       ta.score_payload,
       ta.suggest_dass21,
-      ta.submitted_at
+      ta.submitted_at,ta.context_status,ta.context_snapshot,ta.score_version
     FROM test_attempts ta
     JOIN test_templates tt ON tt.id = ta.template_id
     WHERE ta.user_id = $1
@@ -770,9 +334,9 @@ export const listMyTestResults = async (token: string | null) => {
     userId: user.id,
     results: result.rows.map((row) => ({
       id: row.id,
-      templateId: row.template_id,
+      templateId: row.template_id,contextStatus:row.context_status,contextSnapshot:row.context_snapshot,scoreVersion:row.score_version,
       templateTitle: row.template_title,
-      scoreTotal: row.score_total,
+      scoreTotal: Number(row.score_total),
       scoreLevel: row.score_level,
       scorePayload: row.score_payload,
       suggestDass21: row.suggest_dass21,
@@ -782,280 +346,7 @@ export const listMyTestResults = async (token: string | null) => {
 };
 
 export const getTestReportsOverview = async (token: string | null, query: unknown) => {
-  await initializeTestCore();
-  const user = await getCurrentUser(token);
-  if (user.role === 'student') {
-    throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Hoc sinh khong co quyen xem bao cao tong hop.');
-  }
-
-  const rawQuery = (query && typeof query === 'object') ? query as Record<string, unknown> : {};
-  const days = clampInt(rawQuery.days, 30, 7, 365);
-  const limit = clampInt(rawQuery.limit, 600, 50, 2000);
-  const requestedSchool = String(rawQuery.school || '').trim();
-  const requestedClassName = String(rawQuery.className || '').trim();
-
-  const params: unknown[] = [days];
-  const where: string[] = [`ta.submitted_at >= NOW() - ($1::int * INTERVAL '1 day')`];
-  const pushParam = (value: unknown) => {
-    params.push(value);
-    return `$${params.length}`;
-  };
-
-  let effectiveSchool = '';
-  let effectiveClassName = '';
-  let scope = 'global';
-
-  if (user.role === 'superadmin') {
-    scope = 'superadmin';
-    if (requestedSchool) {
-      effectiveSchool = requestedSchool;
-      where.push(`u.profile_school = ${pushParam(requestedSchool)}`);
-    }
-    if (requestedClassName) {
-      effectiveClassName = requestedClassName;
-      where.push(`u.profile_class_name = ${pushParam(requestedClassName)}`);
-    }
-  } else if (user.role === 'admin') {
-    scope = 'school_admin';
-    effectiveSchool = String(user.profile?.school || '').trim();
-    where.push(`u.profile_school = ${pushParam(effectiveSchool)}`);
-    if (requestedClassName) {
-      effectiveClassName = requestedClassName;
-      where.push(`u.profile_class_name = ${pushParam(requestedClassName)}`);
-    }
-  } else {
-    const teacherType = String(user.profile?.teacherType || (user.profile?.className ? 'homeroom' : 'subject')).trim();
-    const homeroomClass = String(user.profile?.className || '').trim();
-    const teacherSchool = String(user.profile?.school || '').trim();
-
-    if (teacherType === 'homeroom' && homeroomClass) {
-      scope = 'teacher_homeroom';
-      effectiveSchool = teacherSchool;
-      effectiveClassName = homeroomClass;
-      where.push(`u.role = 'student'`);
-      where.push(`u.profile_school = ${pushParam(teacherSchool)}`);
-      where.push(`u.profile_class_name = ${pushParam(homeroomClass)}`);
-    } else {
-      scope = 'teacher_self';
-      where.push(`ta.user_id = ${pushParam(user.id)}`);
-    }
-  }
-
-  const limitRef = pushParam(limit);
-  const result = await getPool().query(`
-    SELECT
-      ta.id,
-      ta.user_id,
-      ta.user_role,
-      ta.template_id,
-      tt.title AS template_title,
-      ta.score_total,
-      ta.score_level,
-      ta.suggest_dass21,
-      ta.submitted_at,
-      u.username,
-      u.profile_name,
-      u.profile_school,
-      u.profile_class_name,
-      u.role AS profile_role
-    FROM test_attempts ta
-    JOIN auth_users u ON u.id = ta.user_id
-    JOIN test_templates tt ON tt.id = ta.template_id
-    WHERE ${where.join(' AND ')}
-    ORDER BY ta.submitted_at DESC
-    LIMIT ${limitRef}
-  `, params);
-
-  const attempts = result.rows.map((row) => {
-    const scoreTotal = Number(row.score_total || 0);
-    const submittedAtIso = new Date(row.submitted_at).toISOString();
-    const isHighRisk = scoreTotal >= 10 || Boolean(row.suggest_dass21);
-
-    return {
-      attemptId: row.id,
-      userId: row.user_id,
-      userRole: row.profile_role || row.user_role || '',
-      username: row.username || '',
-      userName: row.profile_name || row.username || '',
-      school: row.profile_school || '',
-      className: row.profile_class_name || '',
-      templateId: row.template_id,
-      templateTitle: row.template_title,
-      scoreTotal,
-      scoreLevel: row.score_level || '',
-      suggestDass21: Boolean(row.suggest_dass21),
-      submittedAt: submittedAtIso,
-      riskLevel: isHighRisk ? 'high' : (scoreTotal >= 5 ? 'medium' : 'low'),
-      isHighRisk,
-    };
-  });
-
-  const uniqueUsers = new Set<string>();
-  let totalScore = 0;
-  let highRiskCount = 0;
-
-  const byMonthMap = new Map<string, {
-    month: string;
-    count: number;
-    totalScore: number;
-    highRiskCount: number;
-    studentCount: number;
-    teacherCount: number;
-    studentScoreTotal: number;
-    teacherScoreTotal: number;
-  }>();
-  const byRoleMap = new Map<string, { role: string; count: number; totalScore: number; highRiskCount: number }>();
-  const byTemplateMap = new Map<string, { templateId: string; templateTitle: string; count: number; totalScore: number; highRiskCount: number }>();
-  const byClassMap = new Map<string, { className: string; count: number; totalScore: number; highRiskCount: number }>();
-
-  for (const item of attempts) {
-    uniqueUsers.add(item.userId);
-    totalScore += item.scoreTotal;
-    if (item.isHighRisk) highRiskCount += 1;
-
-    const monthKey = item.submittedAt.slice(0, 7);
-    const monthEntry = byMonthMap.get(monthKey) || {
-      month: monthKey,
-      count: 0,
-      totalScore: 0,
-      highRiskCount: 0,
-      studentCount: 0,
-      teacherCount: 0,
-      studentScoreTotal: 0,
-      teacherScoreTotal: 0,
-    };
-    monthEntry.count += 1;
-    monthEntry.totalScore += item.scoreTotal;
-    if (item.isHighRisk) monthEntry.highRiskCount += 1;
-    if (item.userRole === 'student') {
-      monthEntry.studentCount += 1;
-      monthEntry.studentScoreTotal += item.scoreTotal;
-    } else if (item.userRole === 'teacher') {
-      monthEntry.teacherCount += 1;
-      monthEntry.teacherScoreTotal += item.scoreTotal;
-    }
-    byMonthMap.set(monthKey, monthEntry);
-
-    const roleKey = String(item.userRole || 'unknown');
-    const roleEntry = byRoleMap.get(roleKey) || { role: roleKey, count: 0, totalScore: 0, highRiskCount: 0 };
-    roleEntry.count += 1;
-    roleEntry.totalScore += item.scoreTotal;
-    if (item.isHighRisk) roleEntry.highRiskCount += 1;
-    byRoleMap.set(roleKey, roleEntry);
-
-    const templateKey = `${item.templateId}::${item.templateTitle}`;
-    const templateEntry = byTemplateMap.get(templateKey) || {
-      templateId: item.templateId,
-      templateTitle: item.templateTitle,
-      count: 0,
-      totalScore: 0,
-      highRiskCount: 0,
-    };
-    templateEntry.count += 1;
-    templateEntry.totalScore += item.scoreTotal;
-    if (item.isHighRisk) templateEntry.highRiskCount += 1;
-    byTemplateMap.set(templateKey, templateEntry);
-
-    if (item.className) {
-      const classEntry = byClassMap.get(item.className) || {
-        className: item.className,
-        count: 0,
-        totalScore: 0,
-        highRiskCount: 0,
-      };
-      classEntry.count += 1;
-      classEntry.totalScore += item.scoreTotal;
-      if (item.isHighRisk) classEntry.highRiskCount += 1;
-      byClassMap.set(item.className, classEntry);
-    }
-  }
-
-  const sortByMonthAsc = (a: { month: string }, b: { month: string }) => a.month.localeCompare(b.month);
-  const byMonth = Array.from(byMonthMap.values())
-    .sort(sortByMonthAsc)
-    .map((entry) => ({
-      month: entry.month,
-      count: entry.count,
-      avgScore: entry.count > 0 ? Number((entry.totalScore / entry.count).toFixed(2)) : 0,
-      highRiskCount: entry.highRiskCount,
-      studentCount: entry.studentCount,
-      teacherCount: entry.teacherCount,
-      studentAvgScore: entry.studentCount > 0 ? Number((entry.studentScoreTotal / entry.studentCount).toFixed(2)) : 0,
-      teacherAvgScore: entry.teacherCount > 0 ? Number((entry.teacherScoreTotal / entry.teacherCount).toFixed(2)) : 0,
-    }));
-
-  const byRole = Array.from(byRoleMap.values())
-    .map((entry) => ({
-      role: entry.role,
-      count: entry.count,
-      avgScore: entry.count > 0 ? Number((entry.totalScore / entry.count).toFixed(2)) : 0,
-      highRiskCount: entry.highRiskCount,
-    }))
-    .sort((a, b) => b.count - a.count);
-
-  const byTemplate = Array.from(byTemplateMap.values())
-    .map((entry) => ({
-      templateId: entry.templateId,
-      templateTitle: entry.templateTitle,
-      count: entry.count,
-      avgScore: entry.count > 0 ? Number((entry.totalScore / entry.count).toFixed(2)) : 0,
-      highRiskCount: entry.highRiskCount,
-    }))
-    .sort((a, b) => b.count - a.count);
-
-  const byClass = Array.from(byClassMap.values())
-    .map((entry) => ({
-      className: entry.className,
-      count: entry.count,
-      avgScore: entry.count > 0 ? Number((entry.totalScore / entry.count).toFixed(2)) : 0,
-      highRiskCount: entry.highRiskCount,
-    }))
-    .sort((a, b) => b.highRiskCount - a.highRiskCount || b.count - a.count);
-
-  const recentRiskAlerts = attempts
-    .filter((item) => item.isHighRisk)
-    .slice(0, 8)
-    .map((item) => ({
-      attemptId: item.attemptId,
-      userId: item.userId,
-      userName: item.userName,
-      username: item.username,
-      role: item.userRole,
-      school: item.school,
-      className: item.className,
-      templateTitle: item.templateTitle,
-      scoreTotal: item.scoreTotal,
-      scoreLevel: item.scoreLevel,
-      submittedAt: item.submittedAt,
-    }));
-
-  const schoolOptions = Array.from(new Set(attempts.map((item) => item.school).filter(Boolean))).sort((a, b) => a.localeCompare(b));
-  const classOptions = Array.from(new Set(attempts.map((item) => item.className).filter(Boolean))).sort((a, b) => a.localeCompare(b));
-
-  return {
-    scope,
-    filters: {
-      days,
-      school: effectiveSchool,
-      className: effectiveClassName,
-      limit,
-    },
-    summary: {
-      totalAttempts: attempts.length,
-      uniqueUsers: uniqueUsers.size,
-      avgScore: attempts.length > 0 ? Number((totalScore / attempts.length).toFixed(2)) : 0,
-      highRiskCount,
-      highRiskRate: attempts.length > 0 ? Number(((highRiskCount / attempts.length) * 100).toFixed(2)) : 0,
-    },
-    byMonth,
-    byRole,
-    byTemplate,
-    byClass,
-    recentRiskAlerts,
-    schoolOptions,
-    classOptions,
-    attempts,
-  };
+ return snapshotOverview(token,query);
 };
 
 export const getTestOpsSummary = async (token: string | null, query: unknown) => {
@@ -1071,17 +362,17 @@ export const getTestOpsSummary = async (token: string | null, query: unknown) =>
   const params: unknown[] = [hours];
   const where: string[] = [`ta.submitted_at >= NOW() - ($1::int * INTERVAL '1 hour')`];
   if (user.role === 'admin') {
-    params.push(String(user.profile?.school || '').trim());
-    where.push(`u.profile_school = $${params.length}`);
+    params.push(user.profile?.schoolId??null);
+    where.push(`ta.context_status='snapshot' AND ta.context_school_id = $${params.length}`);
   }
 
   const baseWhere = where.join(' AND ');
   const totalResult = await getPool().query(`
     SELECT
       COUNT(*)::int AS total_attempts,
-      COALESCE(AVG(ta.score_total), 0)::float8 AS avg_score,
+      NULL::float8 AS avg_score,
       COUNT(DISTINCT ta.user_id)::int AS unique_users,
-      SUM(CASE WHEN ta.suggest_dass21 = TRUE OR ta.score_total >= 10 THEN 1 ELSE 0 END)::int AS high_risk_count
+      NULL::int AS high_risk_count
     FROM test_attempts ta
     JOIN auth_users u ON u.id = ta.user_id
     WHERE ${baseWhere}
@@ -1091,7 +382,7 @@ export const getTestOpsSummary = async (token: string | null, query: unknown) =>
     SELECT
       TO_CHAR(date_trunc('minute', ta.submitted_at), 'YYYY-MM-DD\"T\"HH24:MI:00\"Z\"') AS minute_bucket,
       COUNT(*)::int AS request_count,
-      COALESCE(AVG(ta.score_total), 0)::float8 AS avg_score
+      NULL::float8 AS avg_score
     FROM test_attempts ta
     JOIN auth_users u ON u.id = ta.user_id
     WHERE ${baseWhere}
@@ -1102,7 +393,7 @@ export const getTestOpsSummary = async (token: string | null, query: unknown) =>
   const timeline = timelineResult.rows.map((row) => ({
     minute: row.minute_bucket,
     requestCount: Number(row.request_count || 0),
-    avgScore: Number(Number(row.avg_score || 0).toFixed(2)),
+    avgScore: null,
   }));
 
   const peakPerMinute = timeline.reduce((max, item) => (item.requestCount > max ? item.requestCount : max), 0);
@@ -1116,9 +407,9 @@ export const getTestOpsSummary = async (token: string | null, query: unknown) =>
     summary: {
       totalAttempts,
       uniqueUsers: Number(totalResult.rows[0]?.unique_users || 0),
-      avgScore: Number(Number(totalResult.rows[0]?.avg_score || 0).toFixed(2)),
-      highRiskCount,
-      highRiskRate: totalAttempts > 0 ? Number(((highRiskCount / totalAttempts) * 100).toFixed(2)) : 0,
+      avgScore: null,
+      highRiskCount: null,
+      highRiskRate: null,
       avgPerMinute,
       peakPerMinute,
     },
@@ -1126,134 +417,33 @@ export const getTestOpsSummary = async (token: string | null, query: unknown) =>
   };
 };
 
-export const createCustomTestTemplate = async (token: string | null, payload: unknown) => {
-  await initializeTestCore();
-  const user = await getCurrentUser(token);
-  if (user.role !== 'admin' && user.role !== 'superadmin') {
-    throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Chi Admin/Superadmin moi duoc tao bai test.');
-  }
-
-  const body = (payload && typeof payload === 'object') ? payload as Record<string, unknown> : {};
-  const title = String(body.title || '').trim();
-  if (!title) throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Thieu tieu de bai test.');
-  const description = String(body.description || '').trim();
-  const audienceRaw = String(body.targetAudience || 'both').trim().toLowerCase();
-  const targetAudience: TestAudience = audienceRaw === 'student' || audienceRaw === 'teacher' || audienceRaw === 'both'
-    ? audienceRaw
-    : 'both';
-
-  const templateId = `ct-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-  await getPool().query(`
-    INSERT INTO test_templates (
-      id, title, description, target_audience, template_code, is_system, is_active, display_order, created_by_user_id
-    ) VALUES (
-      $1, $2, $3, $4, 'CUSTOM', FALSE, TRUE, 1000, $5
-    )
-  `, [templateId, title, description, targetAudience, user.id]);
-
-  const created = await getPool().query(`
-    SELECT id, title, description, target_audience, template_code, is_system, is_active, display_order, created_by_user_id, created_at, updated_at
-    FROM test_templates
-    WHERE id = $1
-    LIMIT 1
-  `, [templateId]);
-
-  await appendTemplateVersion(created.rows[0], 'create', user.id);
-  return { template: mapTemplateRow(created.rows[0]) };
+export const createCustomTestTemplate = async(token:string|null,payload:unknown)=>{
+ await initializeTestCore();const user=await getCurrentUser(token);if(!['admin','superadmin'].includes(user.role))throw new AuthHttpError(403,'AUTH_INVALID_ROLE','Không có quyền quản trị bài test.');
+ const b=(payload&&typeof payload==='object'?payload:{}) as Record<string,unknown>;const title=String(b.title||'').trim();if(!title)throw new AuthHttpError(400,'TEST_INVALID','Thiếu tiêu đề.');const qs=validateQuestionList(b.questionList??[]);const audience=['student','teacher','both'].includes(String(b.targetAudience))?String(b.targetAudience):'both';
+ const client=await getPool().connect();try{await client.query('BEGIN');const id=`ct-${crypto.randomUUID()}`;const r=await client.query("INSERT INTO test_templates(id,title,description,target_audience,template_code,is_system,is_active,display_order,created_by_user_id) VALUES($1,$2,$3,$4,'CUSTOM',FALSE,FALSE,1000,$5) RETURNING *",[id,title,String(b.description||''),audience,user.id]);await replaceQuestions(client,id,qs);if(b.durationMinutes!==undefined||b.iconKey!==undefined||b.colorKey!==undefined){const minutes=b.durationMinutes??null,icon=b.iconKey??'Zap',color=b.colorKey??'primary';if(minutes!==null&&(typeof minutes!=='number'||!Number.isInteger(minutes)||minutes<1||minutes>240)||!TEST_ICONS.includes(icon as any)||!TEST_COLORS.includes(color as any))throw new AuthHttpError(400,'TEST_INVALID','Metadata không hợp lệ.');await client.query('UPDATE test_templates SET duration_minutes=$2,icon_key=$3,color_key=$4 WHERE id=$1',[id,minutes,icon,color]);Object.assign(r.rows[0],{duration_minutes:minutes,icon_key:icon,color_key:color});}await appendVersion(client,r.rows[0],'create',user.id);await client.query('COMMIT');return {template:{...mapTemplateRow(r.rows[0]),questionCount:qs.length,currentVersion:1}};}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
 };
-
-export const updateCustomTestTemplate = async (token: string | null, templateId: string, payload: unknown) => {
-  await initializeTestCore();
-  const user = await getCurrentUser(token);
-  if (user.role !== 'admin' && user.role !== 'superadmin') {
-    throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Chi Admin/Superadmin moi duoc sua bai test.');
-  }
-
-  const existing = await getPool().query(`
-    SELECT id, title, description, target_audience, template_code, is_system, is_active, display_order, created_by_user_id, created_at, updated_at
-    FROM test_templates
-    WHERE id = $1
-    LIMIT 1
-  `, [templateId]);
-  if (existing.rows.length === 0) throw new AuthHttpError(404, 'AUTH_SERVER_ERROR', 'Khong tim thay bai test.');
-
-  const row = existing.rows[0];
-  ensureTemplateWritePermission(user.role, row.is_system);
-  if (user.role === 'admin' && row.created_by_user_id !== user.id) {
-    throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Admin chi duoc sua test custom do minh tao.');
-  }
-
-  const body = (payload && typeof payload === 'object') ? payload as Record<string, unknown> : {};
-  const title = String(body.title || '').trim();
-  const description = String(body.description || '').trim();
-  const audienceRaw = String(body.targetAudience || '').trim().toLowerCase();
-  const targetAudience = audienceRaw === 'student' || audienceRaw === 'teacher' || audienceRaw === 'both'
-    ? audienceRaw
-    : null;
-  const nextIsActive = typeof body.isActive === 'boolean' ? body.isActive : null;
-
-  await getPool().query(`
-    UPDATE test_templates
-    SET
-      title = COALESCE(NULLIF($2, ''), title),
-      description = COALESCE(NULLIF($3, ''), description),
-      target_audience = COALESCE($4, target_audience),
-      is_active = COALESCE($5, is_active),
-      updated_at = NOW()
-    WHERE id = $1
-  `, [templateId, title, description, targetAudience, nextIsActive]);
-
-  const updated = await getPool().query(`
-    SELECT id, title, description, target_audience, template_code, is_system, is_active, display_order, created_by_user_id, created_at, updated_at
-    FROM test_templates
-    WHERE id = $1
-    LIMIT 1
-  `, [templateId]);
-
-  const beforeActive = Boolean(row.is_active);
-  const afterActive = Boolean(updated.rows[0].is_active);
-  const action: TemplateVersionAction = beforeActive !== afterActive
-    ? (afterActive ? 'publish' : 'unpublish')
-    : 'update';
-  await appendTemplateVersion(updated.rows[0], action, user.id);
-  return { template: mapTemplateRow(updated.rows[0]) };
+export const updateCustomTestTemplate=async(token:string|null,id:string,payload:unknown)=>{
+ await initializeTestCore();const user=await getCurrentUser(token),b=(payload&&typeof payload==='object'?payload:{}) as any,qs=b.questionList===undefined?undefined:validateQuestionList(b.questionList);
+ const client=await getPool().connect();try{
+  await client.query('BEGIN');const row=(await client.query('SELECT * FROM test_templates WHERE id=$1 AND archived_at IS NULL FOR UPDATE',[id])).rows[0];if(!row)throw new AuthHttpError(404,'TEST_NOT_FOUND','Không tìm thấy bài test.');assertEditor(user,row);expectedVersion(b.expectedVersion,await currentVersion(client,id));
+  if(qs!==undefined&&row.is_system)throw new AuthHttpError(409,'TEST_SYSTEM_DEFINITION_LOCKED','Bank hệ thống giữ nguyên; metadata-only không gửi questionList.');
+  const active=typeof b.isActive==='boolean'?b.isActive:row.is_active;
+  if(qs?.length===0&&(active||b.confirmEmptyQuestionBank!==true))throw new AuthHttpError(409,'TEST_EMPTY_BANK','Đóng test và xác nhận rõ trước khi xóa hết câu.');
+  if(qs!==undefined)await replaceQuestions(client,id,qs);
+  const count=Number((await client.query('SELECT COUNT(*)::int AS n FROM test_questions WHERE template_id=$1',[id])).rows[0].n);if(active&&!count)throw new AuthHttpError(409,'TEST_EMPTY_ACTIVE_TEMPLATE','Không mở/giữ active bài chưa có câu hỏi.');
+  const audience=['student','teacher','both'].includes(String(b.targetAudience))?b.targetAudience:row.target_audience;
+  let updated=(await client.query('UPDATE test_templates SET title=$2,description=$3,target_audience=$4,is_active=$5,updated_at=NOW() WHERE id=$1 RETURNING *',[id,String(b.title??row.title).trim()||row.title,String(b.description??row.description),audience,active])).rows[0];
+  if(Object.hasOwn(b,'durationMinutes')||Object.hasOwn(b,'iconKey')||Object.hasOwn(b,'colorKey')){const minutes=Object.hasOwn(b,'durationMinutes')?b.durationMinutes:row.duration_minutes,icon=b.iconKey??row.icon_key,color=b.colorKey??row.color_key;if(minutes!==null&&(typeof minutes!=='number'||!Number.isInteger(minutes)||minutes<1||minutes>240)||!TEST_ICONS.includes(icon)||!TEST_COLORS.includes(color))throw new AuthHttpError(400,'TEST_INVALID','Metadata hiển thị không hợp lệ.');await client.query('UPDATE test_templates SET duration_minutes=$2,icon_key=$3,color_key=$4 WHERE id=$1',[id,minutes,icon,color]);}
+  updated=(await client.query('SELECT * FROM test_templates WHERE id=$1',[id])).rows[0];
+  await appendVersion(client,updated,row.is_active!==active?(active?'publish':'unpublish'):'update',user.id);const def=await definitionOf(client,updated);await client.query('COMMIT');return {template:{...mapTemplateRow(updated),questionCount:count,currentVersion:def.currentVersion},definitionDigest:def.definitionDigest};
+ }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
 };
-
-export const deleteCustomTestTemplate = async (token: string | null, templateId: string) => {
-  await initializeTestCore();
-  const user = await getCurrentUser(token);
-  if (user.role !== 'admin' && user.role !== 'superadmin') {
-    throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Chi Admin/Superadmin moi duoc xoa bai test.');
-  }
-
-  const existing = await getPool().query(`
-    SELECT id, title, description, target_audience, template_code, is_system, is_active, display_order, created_by_user_id, created_at, updated_at
-    FROM test_templates
-    WHERE id = $1
-    LIMIT 1
-  `, [templateId]);
-  if (existing.rows.length === 0) throw new AuthHttpError(404, 'AUTH_SERVER_ERROR', 'Khong tim thay bai test.');
-
-  const row = existing.rows[0];
-  ensureTemplateWritePermission(user.role, row.is_system);
-  if (user.role === 'admin' && row.created_by_user_id !== user.id) {
-    throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Admin chi duoc xoa test custom do minh tao.');
-  }
-
-  await appendTemplateVersion(row, 'delete', user.id);
-  await getPool().query(`
-    DELETE FROM test_templates
-    WHERE id = $1
-  `, [templateId]);
-
-  return { id: templateId };
+export const deleteCustomTestTemplate=async(token:string|null,id:string,payload:unknown)=>{
+ await initializeTestCore();const user=await getCurrentUser(token),b=payload as any,client=await getPool().connect();try{
+  await client.query('BEGIN');const row=(await client.query('SELECT * FROM test_templates WHERE id=$1 AND archived_at IS NULL FOR UPDATE',[id])).rows[0];if(!row)throw new AuthHttpError(404,'TEST_NOT_FOUND','Không tìm thấy bài test.');assertEditor(user,row);expectedVersion(b?.expectedVersion,await currentVersion(client,id));
+  await appendVersion(client,row,'delete',user.id);await client.query('UPDATE test_templates SET is_active=FALSE,archived_at=NOW() WHERE id=$1',[id]);await client.query('COMMIT');return {id};
+ }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
 };
+export const publishTestTemplate=async(token:string|null,id:string,payload:unknown)=>{const b=payload as any;if(typeof b?.isActive!=='boolean')throw new AuthHttpError(400,'TEST_INVALID','Thiếu trạng thái.');return updateCustomTestTemplate(token,id,{isActive:b.isActive,expectedVersion:b.expectedVersion});};
 
-export const publishTestTemplate = async (token: string | null, templateId: string, payload: unknown) => {
-  const body = (payload && typeof payload === 'object') ? payload as Record<string, unknown> : {};
-  if (typeof body.isActive !== 'boolean') {
-    throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Thieu trang thai isActive.');
-  }
-  return updateCustomTestTemplate(token, templateId, { isActive: body.isActive });
-};
-
+export const closeTestDatabase = async () => { if (pool) { await pool.end(); pool=null; initialized=false; } };

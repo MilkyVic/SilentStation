@@ -1,3 +1,5 @@
+> HISTORICAL RECORD — Các bước triển khai/acceptance cũ đã được thay bằng native/Vercel–Neon. Không chạy theo runbook này. Xem docs/implementation/NATIVE_ACCEPTANCE_RUNBOOK.md; code/phiếu/version lịch sử không bị đổi.
+
 # Định hướng phát triển: Login không chọn role, role xác định theo tài khoản
 
 ## 1) Hiện trạng logic auth trong codebase

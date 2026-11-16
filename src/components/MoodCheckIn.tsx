@@ -1,3 +1,4 @@
+import {ui,useLocale} from '../features/preferences/ui';
 import React, { useEffect, useMemo, useState } from 'react';
 import { BookOpen, Bot, ClipboardList, Heart, RotateCcw } from 'lucide-react';
 import { cn } from '../lib/utils';
@@ -36,7 +37,7 @@ export default function MoodCheckIn({
   onOpenHandbook,
   onOpenTests,
   onOpenChat,
-}: MoodCheckInProps) {
+}: MoodCheckInProps) {useLocale();
   const today = useMemo(() => getTodayKey(), []);
   const storageKey = useMemo(() => `tram_an_mood_${userId || 'guest'}_${today}`, [today, userId]);
   const [selectedMood, setSelectedMood] = useState<string>('');
@@ -76,9 +77,9 @@ export default function MoodCheckIn({
           <Heart size={24} />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Cảm xúc hôm nay</p>
+          <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">{ui("Cảm xúc hôm nay")}</p>
           <p className="text-sm font-bold text-brand-primary">
-            {selectedMood ? `Bạn đã check-in: ${selectedMood}` : 'Bạn cảm thấy thế nào?'}
+            {selectedMood ? `Bạn đã check-in: ${selectedMood}` : ui("Bạn cảm thấy thế nào?")}
           </p>
         </div>
         {selectedMood && (
@@ -86,7 +87,7 @@ export default function MoodCheckIn({
             type="button"
             onClick={handleReset}
             className="rounded-xl p-2 text-gray-400 transition-colors hover:bg-gray-50 hover:text-brand-primary"
-            title="Chọn lại cảm xúc"
+            title={ui("Chọn lại cảm xúc")}
           >
             <RotateCcw size={16} />
           </button>
@@ -114,8 +115,7 @@ export default function MoodCheckIn({
       {selectedOption?.needsSupport && (
         <div className="mt-4 rounded-2xl bg-gray-50 p-3">
           <p className="text-xs font-bold leading-relaxed text-gray-500">
-            Trạm An gợi ý bạn chọn một bước nhẹ nhàng ngay bây giờ.
-          </p>
+            {ui("Trạm An gợi ý bạn chọn một bước nhẹ nhàng ngay bây giờ.")}</p>
           <div className="mt-3 grid grid-cols-3 gap-2">
             <button
               type="button"
@@ -123,24 +123,21 @@ export default function MoodCheckIn({
               className="flex flex-col items-center gap-1 rounded-xl bg-white px-2 py-2 text-[10px] font-black text-brand-primary"
             >
               <BookOpen size={15} />
-              Cẩm nang
-            </button>
+              {ui("Cẩm nang")}</button>
             <button
               type="button"
               onClick={onOpenTests}
               className="flex flex-col items-center gap-1 rounded-xl bg-white px-2 py-2 text-[10px] font-black text-brand-primary"
             >
               <ClipboardList size={15} />
-              Làm test
-            </button>
+              {ui("Làm test")}</button>
             <button
               type="button"
               onClick={onOpenChat}
               className="flex flex-col items-center gap-1 rounded-xl bg-white px-2 py-2 text-[10px] font-black text-brand-primary"
             >
               <Bot size={15} />
-              Chat
-            </button>
+              {ui("Chat")}</button>
           </div>
         </div>
       )}

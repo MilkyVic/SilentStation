@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { hashPassword, verifyPassword, password, profile, fields, revision } from './accounts/common.js';
+import { seal, unseal } from './accounts/outbox.js';
+import { ACCOUNT_ROUTES } from './accounts/http.js';
+test('account password policy counts Unicode code points and never trims existing passwords', () => { assert.throws(() => password('short')); assert.throws(() => password('🙂'.repeat(14))); assert.equal(password(' 🙂'.repeat(15)), ' 🙂'.repeat(15)); const value = '   testing pass phrase   ', hash = hashPassword(value); assert.ok(verifyPassword(value, hash)); assert.ok(!verifyPassword(value.trim(), hash)); assert.ok(!verifyPassword('x'.repeat(2000), hash)); });
+test('account profile rejects mass assignment, arbitrary avatar and invalid birth year/phone', () => { assert.throws(() => fields({ role: 'superadmin' }, ['name'])); assert.throws(() => profile({ avatarKey: 'https://external.invalid/avatar' })); assert.throws(() => profile({ birthYear: 'abcd' })); assert.throws(() => profile({ phone: '<script>' })); assert.deepEqual(profile({ name: ' A ', phone: '', bio: '', avatarKey: 'mascot' }), { name: 'A', phone: '', bio: '', avatarKey: 'mascot' }); assert.throws(() => revision({ expectedRevision: 1 }, { revision: 2 })); });
+test('outbox encrypts OTP content with integrity and does not expose plaintext in DB', () => { const envelope = seal({ text: 'secret synthetic OTP 111111', to: 'test@invalid' }); assert.ok(!JSON.stringify(envelope).includes('111111')); assert.equal(unseal(envelope).text, 'secret synthetic OTP 111111'); const bad = { ...envelope, tag: Buffer.alloc(16).toString('base64') }; assert.throws(() => unseal(bad)); });
+test('new account routes are unique and include the specified contracts', () => { assert.equal(new Set(ACCOUNT_ROUTES.map(r => r[0] + ' ' + r[1])).size, ACCOUNT_ROUTES.length); for (const route of ['/api/auth/me/profile', '/api/auth/password/change', '/api/auth/me/deactivate', '/api/users/:id/assignment', '/api/classes/:id/members'])
+    assert.ok(ACCOUNT_ROUTES.some(r => r[1] === route)); });

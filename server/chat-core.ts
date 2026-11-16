@@ -39,12 +39,9 @@ let knowledgeChunksCache: KnowledgeChunk[] | null = null;
 let systemPromptCache: string | null = null;
 let geminiClient: GoogleGenAI | null = null;
 
-const RED_CODE_RESPONSE = [
-  'Trạm An đang ở đây và lắng nghe bạn. Những gì bạn vừa chia sẻ cho thấy bạn đang phải gánh chịu một nỗi đau quá lớn và mình thực sự rất lo lắng cho sự an toàn của bạn. Bạn không hề đơn độc trong bóng tối này đâu. Ngay lúc này, xin bạn hãy hít một hơi thật sâu và gọi ngay cho những người có chuyên môn để được bảo vệ kịp thời nhé. Sự an toàn của bạn là điều quan trọng nhất:',
-  '📞 Tổng đài Quốc gia bảo vệ Trẻ em (Trực 24/7, Miễn phí): 111',
-  '📞 Đường dây nóng Ngày Mai: 096 306 1414',
-  '🏥 Cấp cứu Y tế / Bệnh viện Tâm thần Đà Nẵng (193 Nguyễn Lương Bằng, TP. Đà Nẵng): 115 hoặc 1900 1267.',
-  'Hãy nắm lấy tay một người lớn mà bạn tin tưởng nhất lúc này, hoặc để lại số điện thoại để Phòng Tham vấn học đường hỗ trợ bạn ngay lập tức!',
+export const RED_CODE_RESPONSE = [
+  'Nếu bạn đang cảm thấy không an toàn, hãy tìm người lớn đáng tin cậy ở gần bạn ngay và liên hệ nguồn hỗ trợ trực tiếp hiện có.',
+  'Website và chatbot không có người theo dõi tình huống khẩn cấp tức thời. Không chờ phản hồi tại đây và không nhập số điện thoại hoặc thông tin nhận diện.',
 ].join('\n');
 
 const OUT_OF_SCOPE_REDIRECT_RESPONSE = [
@@ -618,6 +615,7 @@ export const sendChatMessage = async (payload: unknown) => {
       const response = await client.models.generateContent({
         model: GEMINI_MODEL,
         contents: prompt,
+        config:{httpOptions:{timeout:15000},abortSignal:AbortSignal.timeout(15000)},
       });
       reply = sanitizeText(response.text);
       if (!reply) {
@@ -625,7 +623,7 @@ export const sendChatMessage = async (payload: unknown) => {
         reply = fallbackAnswer(incomingMessage, contextChunks);
       }
     } catch (error) {
-      console.error('[chat-core] Gemini generate failed', error);
+      console.error('[chat-core] Gemini generate failed');
       usedFallback = true;
       reply = fallbackAnswer(incomingMessage, contextChunks);
     }

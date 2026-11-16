@@ -1,8 +1,11 @@
 import { authService } from './authService';
+import type {LegacyDraft,LegacyWrite} from '../../shared/legacy-tests';
+export class TestClientError extends Error{constructor(public code:string,message:string){super(message);}}
 
 type ApiTemplateAudience = 'student' | 'teacher' | 'both';
 
 type ApiTestTemplate = {
+  durationMinutes?:number|null;iconKey?:string;colorKey?:string;
   id: string;
   title: string;
   description: string;
@@ -15,6 +18,7 @@ type ApiTestTemplate = {
   createdAt?: string;
   updatedAt?: string;
   versionCount?: number;
+  currentVersion?:number;
   lastVersionAt?: string | null;
   questionCount?: number;
 };
@@ -27,7 +31,7 @@ type ApiTestQuestion = {
   options: Array<{
     id: string;
     text: string;
-    score: number;
+    score?: number;
   }>;
 };
 
@@ -66,8 +70,9 @@ type ApiReportAttempt = {
   scoreLevel: string;
   suggestDass21: boolean;
   submittedAt: string;
-  riskLevel: 'low' | 'medium' | 'high';
-  isHighRisk: boolean;
+  scorePayload?:Record<string,unknown>;
+  riskLevel: 'low' | 'medium' | 'high' | 'unreviewed';
+  isHighRisk: boolean | null;
 };
 
 type ServiceResult<T> = {
@@ -95,15 +100,16 @@ const buildApiUrl = (path: string) => `${getApiBaseUrl()}${TEST_API_PREFIX}${pat
 
 const callApi = async (path: string, init?: RequestInit): Promise<unknown | null> => {
   if (!isBrowser()) return null;
+  if((import.meta as {env?:Record<string,unknown>}).env?.MODE==='demo')return {ok:false,error:{code:'DEMO_MODE',message:'Demo chỉ xem giao diện, không gọi API bài test thật.'}};
   const token = authService.getAccessToken();
-  if (!token) return null;
+
 
   try {
     const response = await fetch(buildApiUrl(path), {
       ...init,
+      credentials: 'include',signal:init?.signal??AbortSignal.timeout(20000),
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
         ...(init?.headers || {}),
       },
     });
@@ -136,6 +142,11 @@ const normalizeError = (message: string): ServiceResult<never> => ({
 });
 
 export const testService = {
+  async readDraft(id:string):Promise<LegacyDraft|null>{const r=await callApi(`/drafts/${encodeURIComponent(id)}`) as any;if(!r?.ok)throw new TestClientError(r?.error?.code??'NETWORK_ERROR',r?.error?.message??'Không đọc được nháp.');return r.draft;},
+  async beginDraft(id:string,definitionDigest:string):Promise<LegacyDraft>{const r=await callApi(`/drafts/${encodeURIComponent(id)}`,{method:'POST',body:JSON.stringify({definitionDigest})}) as any;if(!r?.ok||!r.draft)throw new TestClientError(r?.error?.code??'NETWORK_ERROR',r?.error?.message??'Không bắt đầu được lượt làm.');return r.draft;},
+  async saveDraft(id:string,payload:LegacyWrite):Promise<LegacyDraft>{const r=await callApi(`/drafts/${encodeURIComponent(id)}`,{method:'PUT',body:JSON.stringify(payload)}) as any;if(!r?.ok||!r.draft)throw new TestClientError(r?.error?.code??'NETWORK_ERROR',r?.error?.message??'Không xác nhận lưu nháp.');return r.draft;},
+  async clearDraft(id:string,draftId:string|null,revision:number){const r=await callApi(`/drafts/${encodeURIComponent(id)}`,{method:'DELETE',body:JSON.stringify({draftId,revision})}) as any;if(!r?.ok)throw new TestClientError(r?.error?.code??'NETWORK_ERROR',r?.error?.message??'Không xác nhận xóa nháp.');},
+  async getManageDetail(id:string){const r=await callApi(`/templates/${encodeURIComponent(id)}`,{method:'GET'}) as any;if(!r?.ok||!r.template||!Array.isArray(r.questionList))throw new TestClientError(r?.error?.code??'NETWORK_ERROR',r?.error?.message??'Không tải đầy đủ bank. Không bật Lưu.');return r as {template:ApiTestTemplate;questionList:ApiTestQuestion[];definitionDigest:string};},
   async listCatalog(): Promise<ServiceResult<{ userRole: string; templates: ApiTestTemplate[] }>> {
     const payload = await callApi('/catalog', { method: 'GET' });
     if (!payload || typeof payload !== 'object') {
@@ -168,11 +179,7 @@ export const testService = {
     };
   },
 
-  async submitResult(payload: {
-    templateId: string;
-    answers: number[];
-    score?: number;
-  }): Promise<ServiceResult<{
+  async submitResult(payload: LegacyWrite & {templateId:string}): Promise<ServiceResult<{
     attemptId: string;
     scoreTotal: number;
     scoreLevel: string;
@@ -223,6 +230,7 @@ export const testService = {
   async getTemplateDetail(templateId: string): Promise<ServiceResult<{
     template: ApiTestTemplate;
     questionList: ApiTestQuestion[];
+    definitionDigest:string;
   }>> {
     const payload = await callApi(`/${encodeURIComponent(templateId)}`, { method: 'GET' });
     if (!payload || typeof payload !== 'object') {
@@ -234,6 +242,7 @@ export const testService = {
       error?: { code?: string; message?: string };
       template?: ApiTestTemplate;
       questionList?: ApiTestQuestion[];
+      definitionDigest?:string;
     };
 
     if (!result.ok || !result.template) {
@@ -251,6 +260,7 @@ export const testService = {
       data: {
         template: result.template,
         questionList: Array.isArray(result.questionList) ? result.questionList : [],
+        definitionDigest:result.definitionDigest||'',
       },
     };
   },
@@ -321,8 +331,10 @@ export const testService = {
 
   async createTemplate(payload: {
     title: string;
+    durationMinutes?:number|null;iconKey?:string;colorKey?:string;
     description?: string;
     targetAudience?: ApiTemplateAudience;
+    questionList?: {text:string;options:{text:string;score:number}[]}[];
   }): Promise<ServiceResult<{ template: ApiTestTemplate }>> {
     const body = await callApi('/templates', {
       method: 'POST',
@@ -355,7 +367,10 @@ export const testService = {
       title?: string;
       description?: string;
       targetAudience?: ApiTemplateAudience;
+    questionList?: {text:string;options:{text:string;score:number}[]}[];
       isActive?: boolean;
+      expectedVersion:number;durationMinutes?:number|null;iconKey?:string;colorKey?:string;
+      confirmEmptyQuestionBank?:boolean;
     },
   ): Promise<ServiceResult<{ template: ApiTestTemplate }>> {
     const body = await callApi(`/templates/${encodeURIComponent(templateId)}`, {
@@ -386,10 +401,11 @@ export const testService = {
   async publishTemplate(
     templateId: string,
     isActive: boolean,
+    expectedVersion:number,
   ): Promise<ServiceResult<{ template: ApiTestTemplate }>> {
     const body = await callApi(`/templates/${encodeURIComponent(templateId)}/publish`, {
       method: 'POST',
-      body: JSON.stringify({ isActive }),
+      body: JSON.stringify({ isActive,expectedVersion }),
     });
     if (!body || typeof body !== 'object') {
       return normalizeError('Khong ket noi duoc may chu publish/unpublish bai test.');
@@ -412,9 +428,9 @@ export const testService = {
     return { ok: true, data: { template: result.template } };
   },
 
-  async deleteTemplate(templateId: string): Promise<ServiceResult<{ id: string }>> {
+  async deleteTemplate(templateId: string,expectedVersion:number): Promise<ServiceResult<{ id: string }>> {
     const body = await callApi(`/templates/${encodeURIComponent(templateId)}`, {
-      method: 'DELETE',
+      method: 'DELETE',body:JSON.stringify({expectedVersion}),
     });
     if (!body || typeof body !== 'object') {
       return normalizeError('Khong ket noi duoc may chu xoa bai test.');
@@ -485,23 +501,23 @@ export const testService = {
     summary: {
       totalAttempts: number;
       uniqueUsers: number;
-      avgScore: number;
-      highRiskCount: number;
-      highRiskRate: number;
+      avgScore: number|null;
+      highRiskCount: number | null;
+      highRiskRate: number | null;
     };
     byMonth: Array<{
       month: string;
       count: number;
-      avgScore: number;
-      highRiskCount: number;
+      avgScore: number|null;
+      highRiskCount: number | null;
       studentCount: number;
       teacherCount: number;
       studentAvgScore: number;
       teacherAvgScore: number;
     }>;
-    byRole: Array<{ role: string; count: number; avgScore: number; highRiskCount: number }>;
-    byTemplate: Array<{ templateId: string; templateTitle: string; count: number; avgScore: number; highRiskCount: number }>;
-    byClass: Array<{ className: string; count: number; avgScore: number; highRiskCount: number }>;
+    byRole: Array<{ role: string; count: number; avgScore: number|null; highRiskCount: number }>;
+    byTemplate: Array<{ templateId: string; templateTitle: string; count: number; avgScore: number|null; highRiskCount: number }>;
+    byClass: Array<{ className: string; count: number; avgScore: number|null; highRiskCount: number }>;
     recentRiskAlerts: Array<{
       attemptId: string;
       userId: string;
@@ -544,23 +560,23 @@ export const testService = {
       summary?: {
         totalAttempts?: number;
         uniqueUsers?: number;
-        avgScore?: number;
-        highRiskCount?: number;
-        highRiskRate?: number;
+        avgScore?: number|null;
+        highRiskCount?: number | null;
+        highRiskRate?: number | null;
       };
       byMonth?: Array<{
         month: string;
         count: number;
-        avgScore: number;
-        highRiskCount: number;
+        avgScore: number|null;
+        highRiskCount: number | null;
         studentCount: number;
         teacherCount: number;
         studentAvgScore: number;
         teacherAvgScore: number;
       }>;
-      byRole?: Array<{ role: string; count: number; avgScore: number; highRiskCount: number }>;
-      byTemplate?: Array<{ templateId: string; templateTitle: string; count: number; avgScore: number; highRiskCount: number }>;
-      byClass?: Array<{ className: string; count: number; avgScore: number; highRiskCount: number }>;
+      byRole?: Array<{ role: string; count: number; avgScore: number|null; highRiskCount: number }>;
+      byTemplate?: Array<{ templateId: string; templateTitle: string; count: number; avgScore: number|null; highRiskCount: number }>;
+      byClass?: Array<{ className: string; count: number; avgScore: number|null; highRiskCount: number }>;
       recentRiskAlerts?: Array<{
         attemptId: string;
         userId: string;
@@ -602,9 +618,9 @@ export const testService = {
         summary: {
           totalAttempts: Number(result.summary?.totalAttempts || 0),
           uniqueUsers: Number(result.summary?.uniqueUsers || 0),
-          avgScore: Number(result.summary?.avgScore || 0),
-          highRiskCount: Number(result.summary?.highRiskCount || 0),
-          highRiskRate: Number(result.summary?.highRiskRate || 0),
+          avgScore: result.summary?.avgScore==null?null:Number(result.summary.avgScore),
+          highRiskCount: result.summary?.highRiskCount ?? null,
+          highRiskRate: result.summary?.highRiskRate ?? null,
         },
         byMonth: Array.isArray(result.byMonth) ? result.byMonth : [],
         byRole: Array.isArray(result.byRole) ? result.byRole : [],
