@@ -5,6 +5,7 @@ import { AuthHttpError } from '../../server/auth-core.js';
 export const CORS_ORIGIN = process.env.AUTH_API_CORS_ORIGIN || '*';
 
 export const applyCors = (res: any) => {
+  res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('Cache-Control','no-store');
   if (CORS_ORIGIN !== '*') {
     res.setHeader('Access-Control-Allow-Origin', CORS_ORIGIN);
   } else {

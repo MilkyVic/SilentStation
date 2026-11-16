@@ -1,7 +1,9 @@
+import {accountsEnabled,accountHandler} from '../../server/accounts/http.js';
 import { createAdminAccount, listAdminAccounts } from '../../server/auth-core.js';
 import { ensureMethod, getBearerToken, handleApiError, readJsonBody } from '../_lib/handler.js';
 
 export default async function handler(req: any, res: any) {
+ if((accountsEnabled()||process.env.NODE_ENV==='production') && req.method==="POST")return accountHandler(req,res,'admins');
   if (!ensureMethod(req, res, ['GET', 'POST'])) return;
 
   try {

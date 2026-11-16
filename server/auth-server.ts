@@ -1,4 +1,6 @@
+import {legacyExport} from './accounts/reports.js';
 import 'dotenv/config';
+import {ACCOUNT_ROUTES,accountHandler,accountsEnabled} from './accounts/http.js';
 import { readiness, readyHandler } from './readiness.js';
 import { closeDatabase } from './database.js';
 import { closeAuthDatabase } from './auth-core.js';
@@ -41,6 +43,7 @@ import {
   listManageTestTemplates,
   listTemplateVersions,
   getTestTemplateDetail,
+  getManageTestTemplateDetail,
   initializeTestCore,
   listMyTestResults,
   publishTestTemplate,
@@ -51,6 +54,8 @@ import {
 
 export const createApp = () => {
 const app = express();
+app.disable('x-powered-by');
+app.use((_req,res,next)=>{res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('Cache-Control','no-store');next();});
 app.use(express.json({limit:'256kb'}));
 app.use((req,res,next)=>{try{stateChangeCsrf(req); if(req.body?.transport==='cookie'&&req.method==='POST')sameOrigin(req);next();}catch(e){next(e);}});
 
@@ -133,26 +138,31 @@ app.get('/api/admins', asyncHandler(async (req, res) => {
 }));
 
 app.get('/api/users', asyncHandler(async (req, res) => {
+  if(accountsEnabled()){await accountHandler(req,res,'users');return;}
   const data = await listScopedUsers(getBearerToken(req), req.query ?? {});
   res.status(200).json({ ok: true, ...data });
 }));
 
 app.post('/api/users/approve-teacher', asyncHandler(async (req, res) => {
+  if(accountsEnabled()){req.params.id=req.body?.teacherId;await accountHandler(req,res,'approve');return;}
   const data = await approveTeacherAccount(getBearerToken(req), req.body ?? {});
   res.status(200).json({ ok: true, ...data });
 }));
 
 app.post('/api/users/reject-teacher', asyncHandler(async (req, res) => {
+  if(accountsEnabled()){req.params.id=req.body?.teacherId;await accountHandler(req,res,'reject');return;}
   const data = await rejectTeacherAccount(getBearerToken(req), req.body ?? {});
   res.status(200).json({ ok: true, ...data });
 }));
 
 app.post('/api/admins', asyncHandler(async (req, res) => {
+  if(accountsEnabled()||process.env.NODE_ENV==='production'){await accountHandler(req,res,'admins');return;}
   const data = await createAdminAccount(getBearerToken(req), req.body ?? {});
   res.status(201).json({ ok: true, ...data });
 }));
 
 app.post('/api/class-codes/create', asyncHandler(async (req, res) => {
+  if(accountsEnabled()){await accountHandler(req,res,'codeCreate');return;}
   const result = await createClassJoinCode(getBearerToken(req), req.body ?? {});
   res.status(201).json({ ok: true, code: result.code, data: result.data });
 }));
@@ -177,6 +187,8 @@ app.post('/api/chat/send', asyncHandler(async (req, res) => {
   res.status(200).json({ ok: true, ...result });
 }));
 
+for(const [url,action] of new Map(ACCOUNT_ROUTES.map(([,url,action])=>[url,action])))app.all(url,asyncHandler(async(req,res)=>{await accountHandler(req,res,action);}));
+
 app.get('/api/tests/catalog', asyncHandler(async (req, res) => {
   const data = await listTestCatalog(getBearerToken(req));
   res.status(200).json({ ok: true, ...data });
@@ -192,6 +204,7 @@ app.get('/api/tests/results/me', asyncHandler(async (req, res) => {
   res.status(200).json({ ok: true, ...data });
 }));
 
+app.get('/api/tests/reports/export',asyncHandler(async(req,res)=>{await legacyExport(req,res);}));
 app.get('/api/tests/reports/overview', asyncHandler(async (req, res) => {
   const data = await getTestReportsOverview(getBearerToken(req), req.query ?? {});
   res.status(200).json({ ok: true, ...data });
@@ -206,6 +219,8 @@ app.get('/api/tests/templates/manage', asyncHandler(async (req, res) => {
   const data = await listManageTestTemplates(getBearerToken(req));
   res.status(200).json({ ok: true, ...data });
 }));
+
+app.get('/api/tests/templates/:id',asyncHandler(async(req,res)=>{res.setHeader('Cache-Control','no-store');res.json({ok:true,...await getManageTestTemplateDetail(getBearerToken(req),String(req.params.id))});}));
 
 app.get('/api/tests/templates/:id/versions', asyncHandler(async (req, res) => {
   const templateId = String(req.params.id || '').trim();
@@ -232,7 +247,7 @@ app.patch('/api/tests/templates/:id', asyncHandler(async (req, res) => {
 
 app.delete('/api/tests/templates/:id', asyncHandler(async (req, res) => {
   const templateId = String(req.params.id || '').trim();
-  const data = await deleteCustomTestTemplate(getBearerToken(req), templateId);
+  const data = await deleteCustomTestTemplate(getBearerToken(req), templateId,req.body??{});
   res.status(200).json({ ok: true, ...data });
 }));
 
@@ -245,12 +260,17 @@ app.get('/api/tests/:templateId', asyncHandler(async (req, res) => {
 }));
 
 
+app.get('/api/surveys/distribution/campaigns',asyncHandler(async(req,res)=>{await surveyHandler(req,res,'distribution-campaigns');}));
+app.all('/api/surveys/distribution/campaigns/:id/invitations',asyncHandler(async(req,res)=>{await surveyHandler(req,res,'invitations');}));
+app.post('/api/surveys/distribution/invitations/:id/revoke',asyncHandler(async(req,res)=>{await surveyHandler(req,res,'invitation-revoke');}));
+app.get('/api/surveys/invitations/:code',asyncHandler(async(req,res)=>{await surveyHandler(req,res,'invitation');}));
 app.get('/api/surveys/campaigns/:code',asyncHandler(async(req,res)=>{await surveyHandler(req,res,'campaign');}));
 app.post('/api/surveys/campaigns/:code/session',asyncHandler(async(req,res)=>{await surveyHandler(req,res,'session');}));
 app.all('/api/surveys/campaigns/:code/draft',asyncHandler(async(req,res)=>{await surveyHandler(req,res,'draft');}));
 app.post('/api/surveys/campaigns/:code/submit',asyncHandler(async(req,res)=>{await surveyHandler(req,res,'submit');}));
 app.all('/api/surveys/admin/campaigns',asyncHandler(async(req,res)=>{await surveyHandler(req,res,'campaigns');}));
 app.patch('/api/surveys/admin/campaigns/:id',asyncHandler(async(req,res)=>{await surveyHandler(req,res,'campaign-admin');}));
+app.get('/api/surveys/admin/campaigns/:id/grant-candidates',asyncHandler(async(req,res)=>{await surveyHandler(req,res,'grant-candidates');}));
 app.all('/api/surveys/admin/campaigns/:id/grants',asyncHandler(async(req,res)=>{await surveyHandler(req,res,'grants');}));
 app.get('/api/surveys/admin/campaigns/:id/report',asyncHandler(async(req,res)=>{await surveyHandler(req,res,'report');}));
 app.get('/api/surveys/admin/campaigns/:id/responses/:responseId',asyncHandler(async(req,res)=>{await surveyHandler(req,res,'response');}));
@@ -278,7 +298,7 @@ export const startServer = async () => {
   await initializeAuthCore();
   await initializeTestCore();
 
-  return createApp().listen(PORT, () => {
+  return createApp().listen(PORT,process.env.AUTH_API_HOST||(process.env.NODE_ENV==='production'?'0.0.0.0':'127.0.0.1'), () => {
     console.log(`[auth-api] running at http://localhost:${PORT}`);
   });
 };

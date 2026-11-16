@@ -1,3 +1,5 @@
+import {ui,useLocale} from '../../features/preferences/ui';
+import {Link} from 'react-router-dom';
 ﻿import { useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import { ArrowRight, BookOpen, Clock, GraduationCap, Lock, Mail, School, Sparkles, User, Users } from 'lucide-react';
@@ -61,7 +63,7 @@ export default function AuthView({
   onBack,
   onTeacherPending,
   onLoginSuccess,
-}: AuthViewProps) {
+}: AuthViewProps) {useLocale();
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [verificationStep, setVerificationStep] = useState<'none' | 'success'>('none');
   const [regError, setRegError] = useState<string | null>(null);
@@ -185,18 +187,19 @@ export default function AuthView({
 
           <h2 className="text-4xl font-serif italic text-brand-primary mb-2">
             {verificationStep === 'success'
-              ? 'Đăng ký thành công'
+              ? ui("Đăng ký thành công")
               : authMode === 'login'
-                ? 'Chào mừng trở lại'
-                : 'Tạo tài khoản'}
+                ? ui("Chào mừng trở lại")
+                : ui("Tạo tài khoản")}
           </h2>
+<Link className="text-sm underline" to="/khoi-phuc">{ui("Quên mật khẩu / kích hoạt Admin")}</Link>
 
           <p className="text-gray-500 text-sm">
             {verificationStep === 'success'
-              ? 'Tài khoản của bạn đã sẵn sàng để sử dụng.'
+              ? ui("Tài khoản của bạn đã sẵn sàng để sử dụng.")
               : authMode === 'login'
-                ? 'Đăng nhập để tiếp tục hành trình của bạn.'
-                : 'Đăng ký với vai trò và thông tin cá nhân.'}
+                ? ui("Đăng nhập để tiếp tục hành trình của bạn.")
+                : ui("Đăng ký với vai trò và thông tin cá nhân.")}
           </p>
         </div>
 
@@ -207,8 +210,8 @@ export default function AuthView({
             </div>
 
             <div className="space-y-2">
-              <h3 className="text-2xl font-bold text-gray-800">Hoàn tất</h3>
-              <p className="text-gray-500 text-sm leading-relaxed">Bạn có thể đăng nhập ngay với tài khoản vừa tạo.</p>
+              <h3 className="text-2xl font-bold text-gray-800">{ui("Hoàn tất")}</h3>
+              <p className="text-gray-500 text-sm leading-relaxed">{ui("Bạn có thể đăng nhập ngay với tài khoản vừa tạo.")}</p>
             </div>
 
             <button
@@ -222,8 +225,7 @@ export default function AuthView({
               }}
               className="w-full bg-brand-primary text-white py-5 rounded-2xl font-black text-sm hover:shadow-2xl hover:shadow-brand-primary/30 transition-all"
             >
-              VỀ TRANG ĐĂNG NHẬP
-            </button>
+              {ui("VỀ TRANG ĐĂNG NHẬP")}</button>
           </div>
         ) : (
           <>
@@ -427,7 +429,7 @@ export default function AuthView({
 
               {authMode === 'register' && (
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Vai trò</label>
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">{ui("Vai trò")}</label>
                   <div className="flex flex-wrap gap-4">
                     {[STUDENT_ROLE, TEACHER_ROLE].map((role) => (
                       <button
@@ -463,14 +465,13 @@ export default function AuthView({
                       animate={{ opacity: 1, y: 0 }}
                       className="text-[10px] text-brand-orange font-bold italic ml-2 mt-2"
                     >
-                      Tài khoản giáo viên cần được Admin phê duyệt trước khi đăng nhập lần đầu.
-                    </motion.p>
+                      {ui("Tài khoản giáo viên cần được Admin phê duyệt trước khi đăng nhập lần đầu.")}</motion.p>
                   )}
                 </div>
               )}
 
               <div className="space-y-2">
-                <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Tên đăng nhập</label>
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">{ui("Tên đăng nhập")}</label>
                 <div className="relative">
                   <User className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                   <input
@@ -479,7 +480,7 @@ export default function AuthView({
                     value={authForm.username}
                     onChange={(e) => setAuthForm((prev) => ({ ...prev, username: e.target.value }))}
                     className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
-                    placeholder="Nhập tên đăng nhập"
+                    placeholder={ui("Nhập tên đăng nhập")}
                   />
                 </div>
               </div>
@@ -487,22 +488,22 @@ export default function AuthView({
               {authMode === 'login' && adminLoginOtpRequired && (
                 <div className="space-y-3 rounded-2xl border border-brand-orange/30 bg-brand-orange/5 p-4">
                   <p className="text-[11px] font-bold text-brand-orange">
-                    Nhập OTP email cho tài khoản quản trị ({adminLoginOtpMaskedEmail}).
+                    {ui("Nhập OTP email cho tài khoản quản trị (")}{' '}{adminLoginOtpMaskedEmail}).
                   </p>
                   {adminLoginOtpExpiresAt && (
                     <p className="text-[10px] text-gray-500">
-                      Hết hạn lúc: {new Date(adminLoginOtpExpiresAt).toLocaleTimeString()}
+                      {ui("Hết hạn lúc:")}{' '}{new Date(adminLoginOtpExpiresAt).toLocaleTimeString()}
                     </p>
                   )}
                   {adminLoginDevOtpCode && (
-                    <p className="text-[10px] text-brand-orange font-bold">OTP dev: {adminLoginDevOtpCode}</p>
+                    <p className="text-[10px] text-brand-orange font-bold">{ui("OTP dev:")}{' '}{adminLoginDevOtpCode}</p>
                   )}
                   <input
                     type="text"
                     value={adminLoginOtpCode}
                     onChange={(e) => setAdminLoginOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                     className="w-full px-4 py-3 rounded-xl bg-white border border-gray-200 focus:ring-2 focus:ring-brand-primary/20 outline-none font-bold text-gray-700"
-                    placeholder="Nhập mã OTP email"
+                    placeholder={ui("Nhập mã OTP email")}
                   />
                   <button
                     type="button"
@@ -533,13 +534,12 @@ export default function AuthView({
                     }}
                     className="text-[10px] font-black uppercase tracking-widest text-brand-primary hover:underline"
                   >
-                    Gửi lại OTP đăng nhập
-                  </button>
+                    {ui("Gửi lại OTP đăng nhập")}</button>
                 </div>
               )}
 
               <div className="space-y-2">
-                <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Mật khẩu</label>
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">{ui("Mật khẩu")}</label>
                 <div className="relative">
                   <Lock className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                   <input
@@ -548,7 +548,7 @@ export default function AuthView({
                     value={authForm.password}
                     onChange={(e) => setAuthForm((prev) => ({ ...prev, password: e.target.value }))}
                     className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
-                    placeholder="Nhập mật khẩu"
+                    placeholder={ui("Nhập mật khẩu")}
                   />
                 </div>
               </div>
@@ -560,7 +560,7 @@ export default function AuthView({
                   className="space-y-5 pt-2"
                 >
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Họ và tên</label>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">{ui("Họ và tên")}</label>
                     <div className="relative">
                       <User className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                       <input
@@ -569,14 +569,14 @@ export default function AuthView({
                         value={authForm.fullName}
                         onChange={(e) => setAuthForm((prev) => ({ ...prev, fullName: e.target.value }))}
                         className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
-                        placeholder="Nhập họ và tên đầy đủ"
+                        placeholder={ui("Nhập họ và tên đầy đủ")}
                       />
                     </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Năm sinh</label>
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">{ui("Năm sinh")}</label>
                       <div className="relative">
                         <Clock className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                         <input
@@ -585,13 +585,13 @@ export default function AuthView({
                           value={authForm.birthYear}
                           onChange={(e) => setAuthForm((prev) => ({ ...prev, birthYear: e.target.value }))}
                           className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
-                          placeholder="YYYY"
+                          placeholder={ui("YYYY")}
                         />
                       </div>
                     </div>
 
                     <div className="space-y-2">
-                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Giới tính</label>
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">{ui("Giới tính")}</label>
                       <div className="relative">
                         <Users className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                         <select
@@ -600,17 +600,17 @@ export default function AuthView({
                           onChange={(e) => setAuthForm((prev) => ({ ...prev, gender: e.target.value }))}
                           className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700 appearance-none"
                         >
-                          <option value="">Chọn</option>
-                          <option value="Nam">Nam</option>
-                          <option value="Nữ">Nữ</option>
-                          <option value="Khác">Khác</option>
+                          <option value="">{ui("Chọn")}</option>
+                          <option value="Nam">{ui("Nam")}</option>
+                          <option value="Nữ">{ui("Nữ")}</option>
+                          <option value="Khác">{ui("Khác")}</option>
                         </select>
                       </div>
                     </div>
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Email</label>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">{ui("Email")}</label>
                     <div className="relative">
                       <Mail className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                       <input
@@ -619,13 +619,13 @@ export default function AuthView({
                         value={authForm.email}
                         onChange={(e) => setAuthForm((prev) => ({ ...prev, email: e.target.value }))}
                         className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
-                        placeholder="Nhập địa chỉ email"
+                        placeholder={ui("Nhập địa chỉ email")}
                       />
                     </div>
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Trường</label>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">{ui("Trường")}</label>
                     <div className="relative">
                       <School className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                       <input
@@ -634,7 +634,7 @@ export default function AuthView({
                         value={authForm.school}
                         onChange={(e) => setAuthForm((prev) => ({ ...prev, school: e.target.value }))}
                         className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
-                        placeholder="Nhập tên trường"
+                        placeholder={ui("Nhập tên trường")}
                       />
                     </div>
                   </div>
@@ -642,7 +642,7 @@ export default function AuthView({
                   {authForm.role === TEACHER_ROLE && (
                     <div className="space-y-5">
                       <div className="space-y-2">
-                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Loại giáo viên</label>
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">{ui("Loại giáo viên")}</label>
                         <div className="flex flex-wrap gap-2">
                           {[
                             { id: 'homeroom', label: 'Giáo viên chủ nhiệm' },
@@ -676,7 +676,7 @@ export default function AuthView({
 
                       {authForm.teacherType === 'homeroom' ? (
                         <div className="space-y-2">
-                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Lớp chủ nhiệm</label>
+                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">{ui("Lớp chủ nhiệm")}</label>
                           <div className="relative">
                             <GraduationCap className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                             <input
@@ -685,13 +685,13 @@ export default function AuthView({
                               value={authForm.className}
                               onChange={(e) => setAuthForm((prev) => ({ ...prev, className: e.target.value }))}
                               className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
-                              placeholder="Nhập tên lớp"
+                              placeholder={ui("Nhập tên lớp")}
                             />
                           </div>
                         </div>
                       ) : (
                         <div className="space-y-2">
-                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Môn giảng dạy</label>
+                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">{ui("Môn giảng dạy")}</label>
                           <div className="relative">
                             <BookOpen className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                             <input
@@ -700,7 +700,7 @@ export default function AuthView({
                               value={authForm.subject}
                               onChange={(e) => setAuthForm((prev) => ({ ...prev, subject: e.target.value }))}
                               className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
-                              placeholder="VD: Toán, Ngữ văn, Tiếng Anh"
+                              placeholder={ui("VD: Toán, Ngữ văn, Tiếng Anh")}
                             />
                           </div>
                         </div>
@@ -710,7 +710,7 @@ export default function AuthView({
 
                   {authForm.role === STUDENT_ROLE && (
                     <div className="space-y-2">
-                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Mã đăng ký</label>
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">{ui("Mã đăng ký")}</label>
                       <div className="relative">
                         <Lock className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
                         <input
@@ -719,7 +719,7 @@ export default function AuthView({
                           value={authForm.regCode}
                           onChange={(e) => setAuthForm((prev) => ({ ...prev, regCode: e.target.value }))}
                           className="w-full pl-14 pr-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all font-bold text-gray-700"
-                          placeholder="Nhập mã từ giáo viên"
+                          placeholder={ui("Nhập mã từ giáo viên")}
                         />
                       </div>
                     </div>
@@ -728,15 +728,15 @@ export default function AuthView({
                   {otpSessionId && (
                     <div className="space-y-3 rounded-2xl border border-brand-primary/20 bg-brand-primary/5 p-4">
                       <p className="text-[11px] font-bold text-brand-primary">
-                        Nhập mã OTP email để hoàn tất đăng ký {otpDelivery === 'dev_console' ? '(chế độ dev)' : '(đã gửi qua email)'}.
+                        {ui("Nhập mã OTP email để hoàn tất đăng ký")}{' '}{otpDelivery === 'dev_console' ? ui("(chế độ dev)") : ui("(đã gửi qua email)")}.
                       </p>
 
                       {otpExpiryDisplay && (
-                        <p className="text-[10px] text-gray-500">Hết hạn lúc: {otpExpiryDisplay}</p>
+                        <p className="text-[10px] text-gray-500">{ui("Hết hạn lúc:")}{' '}{otpExpiryDisplay}</p>
                       )}
 
                       {devOtpCode && (
-                        <p className="text-[10px] text-brand-orange font-bold">OTP dev: {devOtpCode}</p>
+                        <p className="text-[10px] text-brand-orange font-bold">{ui("OTP dev:")}{' '}{devOtpCode}</p>
                       )}
 
                       <input
@@ -744,7 +744,7 @@ export default function AuthView({
                         value={otpCode}
                         onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                         className="w-full px-4 py-3 rounded-xl bg-white border border-gray-200 focus:ring-2 focus:ring-brand-primary/20 outline-none font-bold text-gray-700"
-                        placeholder="Nhập mã OTP email"
+                        placeholder={ui("Nhập mã OTP email")}
                       />
 
                       <button
@@ -755,8 +755,7 @@ export default function AuthView({
                         }}
                         className="text-[10px] font-black uppercase tracking-widest text-brand-primary hover:underline"
                       >
-                        Gửi lại OTP
-                      </button>
+                        {ui("Gửi lại OTP")}</button>
                     </div>
                   )}
                 </motion.div>
@@ -766,7 +765,7 @@ export default function AuthView({
                 type="submit"
                 className="w-full bg-brand-primary text-white py-5 rounded-2xl font-black text-sm hover:shadow-2xl hover:shadow-brand-primary/30 transition-all mt-4"
               >
-                {authMode === 'login' ? 'ĐĂNG NHẬP' : 'ĐĂNG KÝ'}
+                {authMode === 'login' ? ui("ĐĂNG NHẬP") : ui("ĐĂNG KÝ")}
               </button>
             </form>
 
@@ -789,7 +788,7 @@ export default function AuthView({
                 }}
                 className="text-xs font-bold text-brand-primary hover:underline uppercase tracking-widest"
               >
-                {authMode === 'login' ? 'Chưa có tài khoản? Đăng ký ngay' : 'Đã có tài khoản? Đăng nhập'}
+                {authMode === 'login' ? ui("Chưa có tài khoản? Đăng ký ngay") : ui("Đã có tài khoản? Đăng nhập")}
               </button>
             </div>
           </>

@@ -50,10 +50,11 @@ export const chatService = {
     sessionIdInMemory='';
   },
   async sendMessage(message: string): Promise<ChatSendResult> {
+    if((import.meta as {env?:Record<string,unknown>}).env?.MODE==='demo')return {ok:false,error:{code:'DEMO_MODE',message:'Demo không gọi chatbot backend hoặc gửi dữ liệu đến Gemini.'}};
     try {
       const response = await fetch('/api/chat/send', {
         method: 'POST',
-        credentials:'include',
+        credentials:'include',signal:AbortSignal.timeout(20000),
         headers: {
           'Content-Type': 'application/json',
         },

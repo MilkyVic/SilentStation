@@ -1,0 +1,7 @@
+{
+  "name": "silentstation-maintenance",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-16",
+  "vars": {"SCHEDULER_ENABLED": "false"},
+  "triggers": {"crons": []}
+}

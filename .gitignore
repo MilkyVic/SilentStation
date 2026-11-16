@@ -15,3 +15,11 @@ dist-demo/
 .acceptance/
 artifacts/
 **/__pycache__/
+
+# Synthetic PDFs from the UI-only Chromium regression suite.
+/output/pdf/
+
+# Generated acceptance compilation includes route and SSR test outputs.
+dist-server/api/
+dist-server/src/
+dist-server/workers/

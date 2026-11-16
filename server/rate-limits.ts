@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import type {PoolClient} from 'pg';
 import { database } from './database.js';
 import { validateSessionSecret } from './runtime-config.js';
 export class RateLimitError extends Error { statusCode = 429; code = 'RATE_LIMITED'; constructor() { super('Quá nhiều yêu cầu. Vui lòng thử lại sau.'); } }
@@ -21,16 +22,16 @@ export async function passwordAttempt<T>(username: string, verify: () => Promise
         await client.query('COMMIT'); return result;
     } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
 }
-export async function consumeRate(scope: 'otp' | 'chat', owner: string) {
-    const client = await database().connect(), bucket = bucketKey(scope, owner);
+export async function consumeRate(scope: 'otp' | 'chat', owner: string,transactionClient?:PoolClient) {
+    const client = transactionClient??await database().connect(), bucket = bucketKey(scope, owner);
     const minutes = scope === 'otp' ? 15 : 1, limit = scope === 'otp' ? 3 : 20;
     try {
-        await client.query('BEGIN');
+        if(!transactionClient)await client.query('BEGIN');
         await client.query('INSERT INTO runtime_rate_limits(bucket,window_started) VALUES($1,NOW()) ON CONFLICT DO NOTHING', [bucket]);
         const r = await client.query("SELECT *,window_started<=NOW()-($2::int*INTERVAL '1 minute') AS expired,last_sent_at>NOW()-INTERVAL '30 seconds' AS cooldown FROM runtime_rate_limits WHERE bucket=$1 FOR UPDATE", [bucket, minutes]);
         const row = r.rows[0], count = row.expired ? 0 : row.requests;
         if (count >= limit || (scope === 'otp' && row.cooldown)) throw new RateLimitError();
         await client.query('UPDATE runtime_rate_limits SET requests=$2,window_started=CASE WHEN $3 THEN NOW() ELSE window_started END,last_sent_at=NOW() WHERE bucket=$1', [bucket, count + 1, row.expired]);
-        await client.query('COMMIT');
-    } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
+        if(!transactionClient)await client.query('COMMIT');
+    } catch (e) { if(!transactionClient)await client.query('ROLLBACK'); throw e; } finally { if(!transactionClient)client.release(); }
 }

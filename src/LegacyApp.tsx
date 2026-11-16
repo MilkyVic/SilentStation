@@ -1,12 +1,13 @@
+import {ui,useLocale,formatDate} from './features/preferences/ui';
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { 
-  BookOpen, 
-  Search, 
-  ChevronRight, 
-  Menu, 
-  X, 
-  Zap, 
-  Heart, 
+import {
+  BookOpen,
+  Search,
+  ChevronRight,
+  Menu,
+  X,
+  Zap,
+  Heart,
   Code,
   Info,
   Home,
@@ -51,13 +52,13 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { HANDBOOK_DATA } from './data';
 import { cn } from './lib/utils';
-import { 
-  BarChart, 
-  Bar, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip, 
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
   ResponsiveContainer,
   Cell,
   PieChart,
@@ -65,8 +66,11 @@ import {
 } from 'recharts';
 import { authService } from './services/authService';
 import { chatService } from './services/chatService';
-import { testService } from './services/testService';
+import { testService,TestClientError } from './services/testService';
+import {LegacyCoordinator} from './features/survey/legacy-coordinator';
+import type {LegacyAnswers,LegacyDraft,LegacyReceipt,LegacyWrite} from '../shared/legacy-tests';
 import HandbookView from './components/handbook/HandbookView';
+import AudienceBadge from './components/tests/AudienceBadge';
 import type { AuthAccount, AuthRole } from './types/auth';
 import type { ChatUiMessage } from './types/chat';
 import AuthView from './components/auth/AuthView';
@@ -301,9 +305,7 @@ const normalizeTestFromApiTemplate = (template: any, existingTest?: any) => {
   const localQuestionCount = Array.isArray(existingTest?.questionList) ? existingTest.questionList.length : 0;
   const apiQuestionCount = Number(template?.questionCount || 0);
   const baseQuestionCount = apiQuestionCount > 0 ? apiQuestionCount : localQuestionCount;
-  const time =
-    existingTest?.time
-    || (String(template.templateCode || '').toUpperCase() === 'DASS21' ? '20 phút' : '10 phút');
+  const time=template.durationMinutes==null?'Không giới hạn':`${template.durationMinutes} phút`;
 
   return {
     id: String(template.id),
@@ -311,11 +313,12 @@ const normalizeTestFromApiTemplate = (template: any, existingTest?: any) => {
     desc: template.description || existingTest?.desc || '',
     time,
     questions: existingTest?.questions || `${baseQuestionCount > 0 ? baseQuestionCount : '?'} câu`,
-    icon: existingTest?.icon || 'Zap',
-    color: existingTest?.color || 'bg-brand-primary',
+    icon: template.iconKey || 'Zap',
+    color: `bg-brand-${template.colorKey||'primary'}`,
     isOpen: template.isActive !== false,
     isPredefined: Boolean(template.isSystem),
     versionCount: Number(template.versionCount || existingTest?.versionCount || 0),
+    currentVersion:Number(template.currentVersion??existingTest?.currentVersion??0),definitionDigest:existingTest?.definitionDigest,bankLoaded:existingTest?.bankLoaded,
     lastVersionAt: template.lastVersionAt || existingTest?.lastVersionAt || null,
     targetAudience: mapApiAudienceToLabel(String(template.targetAudience || 'both')),
     questionCount: baseQuestionCount,
@@ -337,16 +340,18 @@ const mapApiQuestionListToUi = (questionList: any[]) => (
   }))
 );
 
-const TestEditorView = ({ 
-  test, 
-  onSave, 
-  onBack 
-}: { 
-  test: any, 
-  onSave: (updatedTest: any) => void, 
-  onBack: () => void 
-}) => {
+const TestEditorView = ({
+  test,
+  onSave,
+  onBack
+}: {
+  test: any,
+  onSave: (updatedTest: any) => void,
+  onBack: () => void
+}) => {useLocale();
   const [questions, setQuestions] = useState<Question[]>(test?.questionList || []);
+  const [questionsDirty,setQuestionsDirty]=useState(false);
+  const bankLocked=!!test.isPredefined;
   const [title, setTitle] = useState(test?.title || 'Bài test mới');
   const [desc, setDesc] = useState(test?.desc || 'Mô tả bài test');
   const [time, setTime] = useState(test?.time || '15 phút');
@@ -355,6 +360,7 @@ const TestEditorView = ({
   const [color, setColor] = useState(test?.color || 'bg-brand-primary');
 
   const addQuestion = () => {
+    if(bankLocked||!test.bankLoaded)return;setQuestionsDirty(true);
     const newQuestion: Question = {
       id: `q${Date.now()}`,
       text: "Câu hỏi mới",
@@ -367,14 +373,17 @@ const TestEditorView = ({
   };
 
   const updateQuestionText = (id: string, text: string) => {
+    if(bankLocked||!test.bankLoaded)return;setQuestionsDirty(true);
     setQuestions(questions.map(q => q.id === id ? { ...q, text } : q));
   };
 
   const deleteQuestion = (id: string) => {
+    if(bankLocked||!test.bankLoaded)return;setQuestionsDirty(true);
     setQuestions(questions.filter(q => q.id !== id));
   };
 
   const addOption = (qId: string) => {
+    if(bankLocked||!test.bankLoaded)return;setQuestionsDirty(true);
     setQuestions(questions.map(q => {
       if (q.id === qId) {
         return {
@@ -387,6 +396,7 @@ const TestEditorView = ({
   };
 
   const updateOption = (qId: string, oId: string, updates: any) => {
+    if(bankLocked||!test.bankLoaded)return;setQuestionsDirty(true);
     setQuestions(questions.map(q => {
       if (q.id === qId) {
         return {
@@ -399,6 +409,7 @@ const TestEditorView = ({
   };
 
   const deleteOption = (qId: string, oId: string) => {
+    if(bankLocked||!test.bankLoaded)return;setQuestionsDirty(true);
     setQuestions(questions.map(q => {
       if (q.id === qId) {
         return {
@@ -411,36 +422,36 @@ const TestEditorView = ({
   };
 
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0, x: 20 }}
       animate={{ opacity: 1, x: 0 }}
       className="max-w-4xl mx-auto px-4 py-20"
     >
       <div className="flex items-center justify-between mb-12">
         <div className="flex items-center gap-6">
-          <button 
+          <button
             onClick={onBack}
             className="w-12 h-12 rounded-2xl bg-white border border-gray-100 flex items-center justify-center text-gray-400 hover:text-brand-primary hover:shadow-lg transition-all"
           >
             <ArrowRight size={20} className="rotate-180" />
           </button>
           <div>
-            <h2 className="text-3xl font-serif italic text-brand-primary">Quản lý câu hỏi</h2>
+            <h2 className="text-3xl font-serif italic text-brand-primary">{ui("Quản lý câu hỏi")}</h2>
             <p className="text-gray-500 font-medium">{title}</p>
           </div>
         </div>
-        <button 
-          onClick={() => onSave({ ...test, title, desc, time, targetAudience, icon, color, questionList: questions, questions: `${questions.length} câu` })}
+        <button
+          disabled={!test.bankLoaded||test.demoOnly}
+          onClick={() => {const empty=questionsDirty&&questions.length===0;if(empty&&!window.confirm('Xóa hết câu chỉ thực hiện với test đã đóng. Xác nhận?'))return;onSave({ ...test, title, desc, time, targetAudience, icon, color, questionsDirty,confirmEmptyQuestionBank:empty,questionList: questions, questions: `${questions.length} câu` });}}
           className="px-8 py-4 bg-brand-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:shadow-xl transition-all"
         >
-          LƯU TẤT CẢ
-        </button>
+          {ui("LƯU TẤT CẢ")}</button>
       </div>
 
       <div className="bg-white p-10 rounded-[3rem] border border-gray-100 shadow-sm mb-8 space-y-6">
         <div>
-          <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2 mb-2">Tiêu đề bài test</label>
-          <input 
+          <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2 mb-2">{ui("Tiêu đề bài test")}</label>
+          <input
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
@@ -448,8 +459,8 @@ const TestEditorView = ({
           />
         </div>
         <div>
-          <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2 mb-2">Mô tả</label>
-          <textarea 
+          <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2 mb-2">{ui("Mô tả")}</label>
+          <textarea
             value={desc}
             onChange={(e) => setDesc(e.target.value)}
             className="w-full px-6 py-4 bg-gray-50 border-none rounded-2xl text-sm font-medium text-gray-600 focus:ring-2 focus:ring-brand-primary/10 outline-none resize-none h-24"
@@ -457,72 +468,73 @@ const TestEditorView = ({
         </div>
         <div className="flex gap-6">
           <div className="flex-1">
-            <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2 mb-2">Thời gian</label>
-            <input 
+            <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2 mb-2">{ui("Thời gian")}</label>
+            <input
               type="text"
-              value={time}
+              title={ui("Thời gian ước lượng, không phải giới hạn bắt buộc")} value={time}
               onChange={(e) => setTime(e.target.value)}
               className="w-full px-6 py-4 bg-gray-50 border-none rounded-2xl text-sm font-medium text-gray-600 focus:ring-2 focus:ring-brand-primary/10 outline-none"
             />
           </div>
           <div className="flex-1">
-            <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2 mb-2">Đối tượng</label>
-            <select 
+            <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2 mb-2">{ui("Đối tượng")}</label>
+            <select
               value={targetAudience}
               onChange={(e) => setTargetAudience(e.target.value)}
               className="w-full px-6 py-4 bg-gray-50 border-none rounded-2xl text-sm font-medium text-gray-600 focus:ring-2 focus:ring-brand-primary/10 outline-none"
             >
-              <option value="Học sinh">Học sinh</option>
-              <option value="Giáo viên">Giáo viên</option>
-              <option value="Cả hai">Cả hai</option>
+              <option value="Học sinh">{ui("Học sinh")}</option>
+              <option value="Giáo viên">{ui("Giáo viên")}</option>
+              <option value="Cả hai">{ui("Cả hai")}</option>
             </select>
           </div>
         </div>
         <div className="flex gap-6">
           <div className="flex-1">
-            <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2 mb-2">Biểu tượng</label>
-            <select 
+            <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2 mb-2">{ui("Biểu tượng")}</label>
+            <select
               value={icon}
               onChange={(e) => setIcon(e.target.value)}
               className="w-full px-6 py-4 bg-gray-50 border-none rounded-2xl text-sm font-medium text-gray-600 focus:ring-2 focus:ring-brand-primary/10 outline-none"
             >
-              <option value="Zap">Tia chớp</option>
-              <option value="Heart">Trái tim</option>
-              <option value="Users">Người dùng</option>
-              <option value="Clock">Đồng hồ</option>
-              <option value="School">Trường học</option>
-              <option value="AlertCircle">Cảnh báo</option>
+              <option value="Zap">{ui("Tia chớp")}</option>
+              <option value="Heart">{ui("Trái tim")}</option>
+              <option value="Users">{ui("Người dùng")}</option>
+              <option value="Clock">{ui("Đồng hồ")}</option>
+              <option value="School">{ui("Trường học")}</option>
+              <option value="AlertCircle">{ui("Cảnh báo")}</option>
             </select>
           </div>
           <div className="flex-1">
-            <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2 mb-2">Màu sắc</label>
-            <select 
+            <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2 mb-2">{ui("Màu sắc")}</label>
+            <select
               value={color}
               onChange={(e) => setColor(e.target.value)}
               className="w-full px-6 py-4 bg-gray-50 border-none rounded-2xl text-sm font-medium text-gray-600 focus:ring-2 focus:ring-brand-primary/10 outline-none"
             >
-              <option value="bg-brand-primary">Xanh ngọc</option>
-              <option value="bg-brand-secondary">Xanh dương</option>
-              <option value="bg-brand-orange">Cam</option>
+              <option value="bg-brand-primary">{ui("Xanh ngọc")}</option>
+              <option value="bg-brand-secondary">{ui("Xanh dương")}</option>
+              <option value="bg-brand-orange">{ui("Cam")}</option>
             </select>
           </div>
         </div>
       </div>
 
-      <div className="space-y-8">
+      <p className="unavailable-note">{test.demoOnly?ui("DEMO chỉ xem, không lưu thay đổi."):bankLocked?ui("Bank hệ thống bị khóa; chỉ lưu metadata."):ui("Chỉ lưu khi đã đọc đầy đủ bank.")} {ui("Thời gian, icon và màu là metadata đã lưu trên backend; không đổi bank/scoring.")}</p>
+      <fieldset disabled={bankLocked||!test.bankLoaded} className="space-y-8">
         {questions.map((q, qIndex) => (
           <div key={q.id} className="bg-white p-10 rounded-[3rem] border border-gray-100 shadow-sm">
             <div className="flex items-start justify-between mb-8 gap-6">
               <div className="flex-1 space-y-2">
-                <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Câu hỏi {qIndex + 1}</label>
-                <input 
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">{ui("Câu hỏi")}{' '}{qIndex + 1}</label>
+                <input
                   type="text"
                   value={q.text}
                   onChange={(e) => updateQuestionText(q.id, e.target.value)}
                   className="w-full px-6 py-4 bg-gray-50 border-none rounded-2xl text-lg font-bold text-brand-primary focus:ring-2 focus:ring-brand-primary/10 outline-none"
                 />
               </div>
-              <button 
+              <button
                 onClick={() => deleteQuestion(q.id)}
                 className="mt-8 p-3 text-gray-300 hover:text-red-500 transition-colors"
               >
@@ -531,25 +543,25 @@ const TestEditorView = ({
             </div>
 
             <div className="space-y-4">
-              <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Các lựa chọn trả lời</label>
+              <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">{ui("Các lựa chọn trả lời")}</label>
               {q.options.map((o) => (
                 <div key={o.id} className="flex items-center gap-4">
-                  <input 
+                  <input
                     type="text"
                     value={o.text}
                     onChange={(e) => updateOption(q.id, o.id, { text: e.target.value })}
                     className="flex-1 px-6 py-3 bg-gray-50 border-none rounded-xl text-sm font-medium focus:ring-2 focus:ring-brand-primary/10 outline-none"
                   />
                   <div className="flex items-center gap-2 bg-gray-50 px-4 py-3 rounded-xl">
-                    <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">ĐIỂM:</span>
-                    <input 
+                    <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{ui("ĐIỂM:")}</span>
+                    <input
                       type="number"
                       value={o.score}
                       onChange={(e) => updateOption(q.id, o.id, { score: parseInt(e.target.value) || 0 })}
                       className="w-12 bg-transparent border-none text-sm font-black text-brand-primary focus:ring-0 outline-none text-center"
                     />
                   </div>
-                  <button 
+                  <button
                     onClick={() => deleteOption(q.id, o.id)}
                     className="p-2 text-gray-300 hover:text-red-500 transition-colors"
                   >
@@ -557,39 +569,38 @@ const TestEditorView = ({
                   </button>
                 </div>
               ))}
-              <button 
+              <button
                 onClick={() => addOption(q.id)}
                 className="w-full py-3 border-2 border-dashed border-gray-100 rounded-xl text-[10px] font-black text-gray-400 uppercase tracking-widest hover:border-brand-primary/20 hover:text-brand-primary transition-all"
               >
-                + THÊM LỰA CHỌN
-              </button>
+                {ui("+ THÊM LỰA CHỌN")}</button>
             </div>
           </div>
         ))}
 
-        <button 
+        <button
           onClick={addQuestion}
           className="w-full py-8 border-2 border-dashed border-brand-primary/20 rounded-[3rem] flex flex-col items-center justify-center gap-4 group hover:bg-brand-primary/5 transition-all"
         >
           <div className="w-12 h-12 rounded-2xl bg-brand-primary/10 text-brand-primary flex items-center justify-center group-hover:scale-110 transition-transform">
             <Zap size={24} />
           </div>
-          <span className="text-xs font-black text-brand-primary uppercase tracking-[0.2em]">THÊM CÂU HỎI MỚI</span>
+          <span className="text-xs font-black text-brand-primary uppercase tracking-[0.2em]">{ui("THÊM CÂU HỎI MỚI")}</span>
         </button>
-      </div>
+      </fieldset>
     </motion.div>
   );
 };
 
-const AccountView = ({ 
-  userData, 
-  onSave, 
+const AccountView = ({
+  userData,
+  onSave,
   onBack,
   teacherRegCode,
   setTeacherRegCode
-}: { 
-  userData: any, 
-  onSave: (updatedData: any) => void, 
+}: {
+  userData: any,
+  onSave: (updatedData: any) => void,
   onBack: () => void,
   teacherRegCode?: { code: string, expiry: number, className?: string } | null,
   setTeacherRegCode?: (code: { code: string, expiry: number, className?: string } | null) => void
@@ -598,7 +609,7 @@ const AccountView = ({
   const [isOtpModalOpen, setIsOtpModalOpen] = useState(false);
   const [otpCode, setOtpCode] = useState('');
   const [isPhoneVerified, setIsPhoneVerified] = useState(!!userData.phoneNumber);
-  
+
   const [tick, setTick] = useState(0);
   const [isGeneratingCode, setIsGeneratingCode] = useState(false);
   const [generateCodeError, setGenerateCodeError] = useState<string | null>(null);
@@ -775,14 +786,14 @@ const AccountView = ({
   };
 
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -20 }}
       className="max-w-4xl mx-auto px-4 py-20"
     >
       <div className="flex items-center gap-6 mb-12">
-        <button 
+        <button
           onClick={onBack}
           className="w-12 h-12 rounded-2xl bg-white border border-gray-100 flex items-center justify-center text-gray-400 hover:text-brand-primary hover:shadow-lg transition-all"
         >
@@ -825,8 +836,8 @@ const AccountView = ({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Họ và tên</label>
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   value={formData.name}
                   onChange={(e) => setFormData({...formData, name: e.target.value})}
                   className="w-full px-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none font-bold text-gray-700"
@@ -834,8 +845,8 @@ const AccountView = ({
               </div>
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Tên tài khoản</label>
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   value={formData.username}
                   disabled
                   className="w-full px-6 py-4 rounded-2xl bg-gray-100 border-none outline-none font-bold text-gray-400 cursor-not-allowed"
@@ -846,8 +857,8 @@ const AccountView = ({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Năm sinh</label>
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   value={formData.birthYear}
                   onChange={(e) => setFormData({...formData, birthYear: e.target.value})}
                   className="w-full px-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none font-bold text-gray-700"
@@ -855,7 +866,7 @@ const AccountView = ({
               </div>
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Giới tính</label>
-                <select 
+                <select
                   value={formData.gender}
                   onChange={(e) => setFormData({...formData, gender: e.target.value})}
                   className="w-full px-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none font-bold text-gray-700 appearance-none"
@@ -870,8 +881,8 @@ const AccountView = ({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Email</label>
-                <input 
-                  type="email" 
+                <input
+                  type="email"
                   value={formData.email}
                   onChange={(e) => setFormData({...formData, email: e.target.value})}
                   className="w-full px-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none font-bold text-gray-700"
@@ -880,8 +891,8 @@ const AccountView = ({
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Số điện thoại</label>
                 <div className="flex gap-2">
-                  <input 
-                    type="tel" 
+                  <input
+                    type="tel"
                     value={formData.phoneNumber}
                     onChange={(e) => {
                       setFormData({...formData, phoneNumber: e.target.value});
@@ -890,7 +901,7 @@ const AccountView = ({
                     className="flex-1 px-6 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none font-bold text-gray-700"
                   />
                   {formData.phoneNumber && !isPhoneVerified && (
-                    <button disabled data-unavailable="true" 
+                    <button disabled data-unavailable="true"
                       onClick={() => setIsOtpModalOpen(true)}
                       className="px-4 bg-brand-orange text-white rounded-2xl font-bold text-xs hover:bg-brand-orange/90 transition-colors whitespace-nowrap"
                     >
@@ -910,8 +921,8 @@ const AccountView = ({
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Trường</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={formData.school}
                     onChange={(e) => setFormData({...formData, school: e.target.value})}
                     readOnly={formData.role === 'Học sinh'}
@@ -923,8 +934,8 @@ const AccountView = ({
                 </div>
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Lớp</label>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     value={formData.className}
                     onChange={(e) => setFormData({...formData, className: e.target.value})}
                     readOnly={formData.role === 'Học sinh'}
@@ -939,7 +950,7 @@ const AccountView = ({
 
             <div className="space-y-2">
               <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Giới thiệu bản thân</label>
-              <textarea 
+              <textarea
                 rows={4}
                 value={formData.bio}
                 onChange={(e) => setFormData({...formData, bio: e.target.value})}
@@ -948,7 +959,7 @@ const AccountView = ({
             </div>
 
             <div className="pt-6 flex gap-4">
-              <button disabled data-unavailable="true" 
+              <button disabled data-unavailable="true"
                 onClick={() => {
                   if (formData.phoneNumber && !isPhoneVerified) {
                     alert('Vui lòng xác nhận số điện thoại trước khi lưu.');
@@ -967,9 +978,9 @@ const AccountView = ({
                 <h4 className="text-lg font-bold text-brand-primary mb-4">Mã đăng ký lớp học</h4>
                 <p className="text-sm text-gray-500 mb-6">Tạo mã để học sinh đăng ký vào lớp. Mã được backend quản lý và tự động hết hạn theo cấu hình hệ thống.</p>
                 <p className="text-xs text-brand-orange font-bold mb-6">Mỗi lần tạo mã mới, mã active cũ của cùng lớp sẽ tự động bị thu hồi.</p>
-                
+
                 <div className="flex items-center gap-4">
-                  <button 
+                  <button
                     onClick={() => {
                       void handleGenerateCode();
                     }}
@@ -983,12 +994,12 @@ const AccountView = ({
                   >
                     {isGeneratingCode ? 'Đang tạo...' : 'Tạo mã mới'}
                   </button>
-                  
+
                   {teacherRegCode && teacherRegCode.expiry > Date.now() ? (
                     <div className="flex-1 flex items-center justify-between bg-gray-50 px-6 py-4 rounded-2xl border border-gray-100">
                       <span className="font-mono text-2xl font-black text-gray-800 tracking-widest">{teacherRegCode.code}</span>
                       <span className="text-sm font-bold text-brand-orange flex items-center gap-2">
-                        <Clock size={16} /> 
+                        <Clock size={16} />
                         {Math.ceil((teacherRegCode.expiry - Date.now()) / 1000)}s
                       </span>
                     </div>
@@ -1155,7 +1166,7 @@ const AccountView = ({
       <AnimatePresence>
         {isOtpModalOpen && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-gray-900/40 backdrop-blur-sm">
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
@@ -1168,24 +1179,24 @@ const AccountView = ({
                 <h3 className="text-2xl font-serif italic text-brand-primary mb-2">Xác nhận SĐT</h3>
                 <p className="text-sm text-gray-500">Nhập mã OTP 6 số được gửi đến {formData.phoneNumber}</p>
               </div>
-              
-              <input 
-                type="text" 
+
+              <input
+                type="text"
                 maxLength={6}
                 value={otpCode}
                 onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
                 placeholder="123456"
                 className="w-full text-center text-3xl tracking-[0.5em] font-mono font-black py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none mb-8"
               />
-              
+
               <div className="flex gap-4">
-                <button disabled data-unavailable="true" 
+                <button disabled data-unavailable="true"
                   onClick={() => setIsOtpModalOpen(false)}
                   className="flex-1 py-4 text-gray-500 font-bold text-sm hover:bg-gray-50 rounded-2xl transition-colors"
                 >
                   Hủy
                 </button>
-                <button disabled data-unavailable="true" 
+                <button disabled data-unavailable="true"
                   onClick={handleVerifyPhone}
                   className="flex-1 py-4 bg-brand-primary text-white font-bold text-sm rounded-2xl hover:shadow-lg hover:shadow-brand-primary/30 transition-all"
                 >
@@ -1200,25 +1211,21 @@ const AccountView = ({
   );
 };
 
-const TestTakingView = ({ 
-  test, 
+const TestTakingView = ({
+  test,
   userData,
-  onComplete, 
+  onComplete,
   onBack,
   onTakeDass21
-}: { 
-  test: any, 
+}: {
+  test: any,
   userData: any,
-  onComplete: (payload: { test: any; answers: number[]; score: number }) => Promise<{
-    scoreTotal: number;
-    scoreLevel: string;
-    suggestDass21: boolean;
-  }>, 
+  onComplete: (payload: {test:any} & LegacyWrite) => Promise<LegacyReceipt>,
   onBack: () => void,
   onTakeDass21?: () => void
-}) => {
+}) => {useLocale();
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [answers, setAnswers] = useState<Record<string, number>>({});
+  const [answers, setAnswers] = useState<LegacyAnswers>({});
   const [isFinished, setIsFinished] = useState(false);
   const [finalScore, setFinalScore] = useState(0);
   const [finalScoreLevel, setFinalScoreLevel] = useState('');
@@ -1232,7 +1239,8 @@ const TestTakingView = ({
   const [copySuccess, setCopySuccess] = useState<string | null>(null);
 
   const questions = test.questionList || [];
-  const draftRevision=useRef(0),draftQueue=useRef<Promise<unknown>>(Promise.resolve());
+  const [round,setRound]=useState<LegacyDraft|null>(null),[coordinator,setCoordinator]=useState<LegacyCoordinator|null>(null),[loadingDraft,setLoadingDraft]=useState(true),[savePhase,setSavePhase]=useState('idle');
+  const attemptEpoch=useRef(0),submitGuard=useRef(false);
   const demo=(import.meta as {env?:Record<string,unknown>}).env?.MODE==='demo';
   const draftKey = `tram_an_test_draft_${userData?.id || 'unknown'}_${String(test?.id || '')}`;
 
@@ -1398,67 +1406,19 @@ const TestTakingView = ({
     return { label, level, description, color, bgColor, borderColor, maxScore };
   };
 
-  const handleSelectOption = (qId: string, score: number) => {
-    const nextAnswers = { ...answers, [qId]: score };
-    setAnswers(nextAnswers);
-    setSubmitError('');
-
-    if(!demo){draftQueue.current=draftQueue.current.then(async()=>{const r=await testService.saveDraft(String(test.id),nextAnswers,draftRevision.current);if(!r?.ok||!r.draft)throw new Error(r?.error?.message??'Không xác nhận lưu nháp.');draftRevision.current=r.draft.revision;}).catch(error=>{setSubmitError(error.message);throw error;});draftQueue.current.catch(()=>{});}
-  };
-
-  useEffect(() => {
-    setCurrentQuestionIndex(0);
-    setAnswers({});
-    setIsFinished(false);
-    setFinalScore(0);
-    setFinalScoreLevel('');
-    setSubmitError('');
-    setShowDassPrompt(false);
-    setShowBreathingWidget(false);
-    setBreathPhase('inhale');
-    setBreathTimer(4);
-    setSimulatedCall(null);
-    setCopySuccess(null);
-
-    draftRevision.current=0;draftQueue.current=Promise.resolve();
-    let active=true;
-    if(!demo)void testService.readDraft(String(test.id)).then(r=>{if(!active)return;if(r?.ok&&r.draft){setAnswers(r.draft.answers);draftRevision.current=r.draft.revision;}else setSubmitError(r?.error?.message??'Không đọc được nháp.');});
-    return()=>{active=false;};
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [draftKey, test?.id]);
-
-  const handleNext = async () => {
-    if (isSubmitting) return;
-
-    if (currentQuestionIndex < questions.length - 1) {
-      setCurrentQuestionIndex(currentQuestionIndex + 1);
-    } else {
-      const answerList = questions.map((question: any) => Number(answers[question.id] ?? 0));
-      const totalScore = answerList.reduce((sum, s) => sum + s, 0);
-      setSubmitError('');
-      setIsSubmitting(true);
-
-      try {
-        if(!demo)await draftQueue.current;
-        const result = await onComplete({ test, answers: answerList, score: totalScore });
-        const resolvedScore = Number.isFinite(Number(result.scoreTotal)) ? Number(result.scoreTotal) : totalScore;
-
-        setFinalScore(resolvedScore);
-        setFinalScoreLevel(result.scoreLevel || getEvaluation(test.title, resolvedScore));
-        setIsFinished(true);
-
-        if(!demo)await testService.clearDraft(String(test.id));
-
-        if (result.suggestDass21) {
-          setShowDassPrompt(true);
-        }
-      } catch (error) {
-        setSubmitError(error instanceof Error ? error.message : 'Không thể nộp bài. Vui lòng thử lại.');
-      } finally {
-        setIsSubmitting(false);
-      }
-    }
-  };
+  const handleSelectOption=(qId:string,optionId:string)=>{if(submitGuard.current||coordinator?.uncertain)return;const next={...answers,[qId]:optionId};setAnswers(next);setSubmitError('');if(!demo)coordinator?.queue.set(next,0);};
+  useEffect(()=>{const generation=++attemptEpoch.current;let active=true;setCurrentQuestionIndex(0);setAnswers({});setIsFinished(false);setSubmitError('');setCoordinator(null);setRound(null);setLoadingDraft(!demo);submitGuard.current=false;
+   if(!demo)(async()=>{try{const saved=await testService.readDraft(String(test.id))??await testService.beginDraft(String(test.id),test.definitionDigest);if(!active||attemptEpoch.current!==generation)return;setRound(saved);if(saved.restartRequired)return;if(saved.receipt){setFinalScore(saved.receipt.scoreTotal);setFinalScoreLevel(saved.receipt.scoreLevel);setIsFinished(true);return;}
+    const c=new LegacyCoordinator(String(test.id),saved,{saveDraft:testService.saveDraft,readDraft:testService.readDraft,submit:payload=>onComplete({test,...payload})});setCoordinator(c);setAnswers(saved.answers);
+   }catch(e){if(active)setSubmitError((e as Error).message);}finally{if(active)setLoadingDraft(false);}})();return()=>{active=false;};
+  },[draftKey,test.id]);
+  useEffect(()=>{if(!coordinator)return;const generation=attemptEpoch.current;const update=()=>{if(generation!==attemptEpoch.current)return;const state=coordinator.queue.snapshot;setSavePhase(state.phase);setSubmitError(state.error?.message??'');setRound(state.ack);if(state.ack.receipt){setFinalScore(state.ack.receipt.scoreTotal);setFinalScoreLevel(state.ack.receipt.scoreLevel);setIsFinished(true);}};update();return coordinator.queue.subscribe(update);},[coordinator]);
+  useEffect(()=>{const guard=(e:BeforeUnloadEvent)=>{if(coordinator?.queue.dirty||coordinator?.uncertain){e.preventDefault();e.returnValue='';}};window.addEventListener('beforeunload',guard);return()=>window.removeEventListener('beforeunload',guard);},[coordinator]);
+  async function restartRound(){if(!window.confirm('Xóa nháp của lượt này và đọc bank mới? Không tự chuyển đáp án.'))return;try{await coordinator?.queue.stop();const saved=await testService.readDraft(String(test.id));if(saved)await testService.clearDraft(String(test.id),saved.draftId,saved.revision);window.location.reload();}catch(e){setSubmitError((e as Error).message);}}
+  const handleNext=async()=>{if(submitGuard.current)return;if(currentQuestionIndex<questions.length-1){setCurrentQuestionIndex(i=>i+1);return;}if(demo){setSubmitError('Demo chỉ xem giao diện, không nộp kết quả thật.');return;}if(!coordinator)return;
+   const generation=attemptEpoch.current;submitGuard.current=true;setIsSubmitting(true);try{const result=await coordinator.submit();if(generation!==attemptEpoch.current)return;setFinalScore(result.scoreTotal);setFinalScoreLevel(result.scoreLevel);setIsFinished(true);setSubmitError('');
+    const d=coordinator.queue.snapshot.ack;try{await testService.clearDraft(String(test.id),d.draftId,d.revision);}catch{/* Receipt stays valid; cleanup is not another submission. */}
+   }catch(e){if(generation===attemptEpoch.current)setSubmitError((e as Error).message);}finally{if(generation===attemptEpoch.current){submitGuard.current=false;setIsSubmitting(false);}}};
 
   const handlePrev = () => {
     if (currentQuestionIndex > 0) {
@@ -1505,12 +1465,15 @@ const TestTakingView = ({
     window.setTimeout(() => setCopySuccess(null), 2000);
   };
 
+  if(loadingDraft)return <div className="page-wrap"><p role="status">{ui("Đang đọc phiên bản và nháp…")}</p></div>;
+  if(round?.restartRequired||['version_changed','expired'].includes(savePhase))return <div className="page-wrap"><p className="error-note">{ui("Bank đã đổi/nháp cũ chưa có version hoặc đã hết hạn. Không tự chuyển đáp án.")}</p><button className="primary-button" onClick={()=>void restartRound()}>{ui("Xác nhận bắt đầu lại")}</button><button className="secondary-button" onClick={onBack}>{ui("Quay lại")}</button></div>;
+  if(!demo&&!coordinator&&!isFinished)return <div className="page-wrap"><p role="alert" className="error-note">{submitError||'Không bắt đầu được phiên.'}</p><button className="secondary-button" onClick={onBack}>{ui("Quay lại")}</button></div>;
   if (questions.length === 0) {
     return (
       <div className="max-w-2xl mx-auto px-4 py-40 text-center">
-        <h2 className="text-3xl font-serif italic text-brand-primary mb-6">Bài test đang được cập nhật</h2>
-        <p className="text-gray-500 mb-10">Vui lòng quay lại sau khi giáo viên đã thêm câu hỏi.</p>
-        <button onClick={onBack} className="px-8 py-4 bg-brand-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest">QUAY LẠI</button>
+        <h2 className="text-3xl font-serif italic text-brand-primary mb-6">{ui("Bài test đang được cập nhật")}</h2>
+        <p className="text-gray-500 mb-10">{ui("Vui lòng quay lại sau khi giáo viên đã thêm câu hỏi.")}</p>
+        <button onClick={onBack} className="px-8 py-4 bg-brand-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest">{ui("QUAY LẠI")}</button>
       </div>
     );
   }
@@ -1555,22 +1518,21 @@ const TestTakingView = ({
     ];
 
     return (
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         className="max-w-4xl mx-auto px-4 py-16"
       >
         <div className="text-center mb-12">
           <span className="inline-flex items-center gap-2 px-4 py-1.5 bg-brand-primary/10 text-brand-primary rounded-full text-[10px] font-black uppercase tracking-[0.2em] mb-4">
-            <Sparkles size={12} /> BÁO CÁO GIẢI MÃ EMOTION
-          </span>
-          <h2 className="text-4xl font-sans font-black text-brand-primary leading-tight tracking-tight">KẾT QUẢ ĐÁNH GIÁ TÂM LÝ</h2>
+            <Sparkles size={12} /> {ui("BÁO CÁO GIẢI MÃ EMOTION")}</span>
+          <h2 className="text-4xl font-sans font-black text-brand-primary leading-tight tracking-tight">{ui("KẾT QUẢ ĐÁNH GIÁ TÂM LÝ")}</h2>
           <p className="text-gray-500 mt-2 text-sm font-semibold uppercase tracking-widest">{test.title}</p>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 mb-12">
           <div className="lg:col-span-5 bg-white p-10 rounded-[3rem] border border-gray-100 shadow-xl flex flex-col items-center justify-center text-center">
-            <p className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em] mb-4">CHỈ SỐ CẢM XÚC ĐẠT ĐƯỢC</p>
+            <p className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em] mb-4">{ui("CHỈ SỐ CẢM XÚC ĐẠT ĐƯỢC")}</p>
 
             <div className="relative w-48 h-48 flex items-center justify-center mb-6">
               <svg className="w-full h-full -rotate-90" viewBox="0 0 100 100">
@@ -1591,14 +1553,14 @@ const TestTakingView = ({
               </svg>
               <div className="absolute text-center">
                 <span className="text-6xl font-black text-gray-800 leading-none">{finalScore}</span>
-                <p className="text-xs font-bold text-gray-400 mt-1">/ {evaluation.maxScore} điểm</p>
+                <p className="text-xs font-bold text-gray-400 mt-1">/ {evaluation.maxScore} {ui("điểm")}</p>
               </div>
             </div>
 
             <div className="w-full mt-2">
               <div className="flex justify-between text-[10px] font-black tracking-wider text-gray-400 uppercase px-1 mb-2">
                 <span>0</span>
-                <span>Trung bình</span>
+                <span>{ui("Trung bình")}</span>
                 <span>{evaluation.maxScore}</span>
               </div>
               <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden">
@@ -1617,11 +1579,11 @@ const TestTakingView = ({
             <div>
               <div className="flex items-center gap-3 mb-6">
                 <div className={cn('px-5 py-2.5 rounded-2xl font-black text-xs uppercase tracking-widest border', evaluation.color, evaluation.bgColor, evaluation.borderColor)}>
-                  Phân loại: {displayLabel}
+                  {ui("Phân loại:")}{' '}{displayLabel}
                 </div>
               </div>
 
-              <h4 className="text-2xl font-bold text-gray-800 mb-4 tracking-tight">Phân tích chuyên sâu</h4>
+              <h4 className="text-2xl font-bold text-gray-800 mb-4 tracking-tight">{ui("Phân tích chuyên sâu")}</h4>
               <p className="text-gray-500 text-base leading-relaxed mb-8">{evaluation.description}</p>
             </div>
 
@@ -1636,7 +1598,7 @@ const TestTakingView = ({
                 )}
               >
                 <Activity size={16} />
-                {showBreathingWidget ? 'TẮT BÀI THỞ' : 'THỰC HÀNH THỞ SÂU 4-7-8'}
+                {showBreathingWidget ? ui("TẮT BÀI THỞ") : ui("THỰC HÀNH THỞ SÂU 4-7-8")}
               </button>
             </div>
           </div>
@@ -1656,13 +1618,11 @@ const TestTakingView = ({
                 <AlertCircle size={28} className="animate-bounce" />
               </div>
               <div>
-                <h4 className="text-red-700 text-xl font-bold mb-2">BÁO ĐỘNG SỨC KHỎE TÂM LÝ KHẨN CẤP</h4>
+                <h4 className="text-red-700 text-xl font-bold mb-2">{ui("BÁO ĐỘNG SỨC KHỎE TÂM LÝ KHẨN CẤP")}</h4>
                 <p className="text-red-600/90 text-sm leading-relaxed mb-4">
-                  Chỉ số của bạn đang ở mức cao và có thể tạo cảm giác quá tải. Trạm An khuyến khích bạn dừng lại, hít thở chậm và liên hệ ngay với một người lớn đáng tin cậy hoặc kênh hỗ trợ bên dưới.
-                </p>
+                  {ui("Chỉ số của bạn đang ở mức cao và có thể tạo cảm giác quá tải. Trạm An khuyến khích bạn dừng lại, hít thở chậm và liên hệ ngay với một người lớn đáng tin cậy hoặc kênh hỗ trợ bên dưới.")}</p>
                 <span className="text-[10px] font-black tracking-widest uppercase bg-red-500/10 text-red-600 px-3 py-1.5 rounded-lg">
-                  Ưu tiên an toàn, bảo mật và không phán xét
-                </span>
+                  {ui("Ưu tiên an toàn, bảo mật và không phán xét")}</span>
               </div>
             </div>
           </motion.div>
@@ -1675,7 +1635,7 @@ const TestTakingView = ({
             className="bg-brand-primary/5 p-10 rounded-[3.5rem] border border-brand-primary/10 shadow-inner mb-12 text-center"
           >
             <div className="max-w-md mx-auto flex flex-col items-center">
-              <p className="text-xs font-black text-brand-primary tracking-[0.2em] uppercase mb-4">Điều hòa nhịp thở và căng thẳng</p>
+              <p className="text-xs font-black text-brand-primary tracking-[0.2em] uppercase mb-4">{ui("Điều hòa nhịp thở và căng thẳng")}</p>
 
               <div className="relative w-40 h-40 flex items-center justify-center my-6">
                 <motion.div
@@ -1692,25 +1652,24 @@ const TestTakingView = ({
                 />
                 <div className="z-10 text-center">
                   <span className="text-4xl font-black text-brand-primary">{breathTimer}</span>
-                  <p className="text-[10px] font-black uppercase tracking-widest text-brand-primary/70 mt-1">giây</p>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-brand-primary/70 mt-1">{ui("giây")}</p>
                 </div>
               </div>
 
               <div className="mb-6">
                 {breathPhase === 'inhale' && (
-                  <motion.p key="inhale" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-xl font-serif italic text-brand-primary">Hít vào thật đều trong 4 giây...</motion.p>
+                  <motion.p key="inhale" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-xl font-serif italic text-brand-primary">{ui("Hít vào thật đều trong 4 giây...")}</motion.p>
                 )}
                 {breathPhase === 'hold' && (
-                  <motion.p key="hold" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-xl font-serif italic text-amber-600">Giữ hơi thở trong 7 giây...</motion.p>
+                  <motion.p key="hold" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-xl font-serif italic text-amber-600">{ui("Giữ hơi thở trong 7 giây...")}</motion.p>
                 )}
                 {breathPhase === 'exhale' && (
-                  <motion.p key="exhale" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-xl font-serif italic text-emerald-600">Thở ra chậm rãi trong 8 giây...</motion.p>
+                  <motion.p key="exhale" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-xl font-serif italic text-emerald-600">{ui("Thở ra chậm rãi trong 8 giây...")}</motion.p>
                 )}
               </div>
 
               <p className="text-gray-400 text-xs leading-relaxed">
-                Bài thở 4-7-8 giúp cơ thể chậm lại khi căng thẳng. Bạn có thể lặp lại vài vòng trước khi tiếp tục làm việc khác.
-              </p>
+                {ui("Bài thở 4-7-8 giúp cơ thể chậm lại khi căng thẳng. Bạn có thể lặp lại vài vòng trước khi tiếp tục làm việc khác.")}</p>
             </div>
           </motion.div>
         )}
@@ -1721,8 +1680,8 @@ const TestTakingView = ({
               <PhoneCall size={24} />
             </div>
             <div>
-              <h3 className="text-2xl font-serif italic text-brand-primary">Mạng lưới tư vấn và hỗ trợ</h3>
-              <p className="text-gray-400 text-xs font-semibold">Sao chép nhanh số liên hệ hoặc mở kết nối gọi khi bạn cần hỗ trợ.</p>
+              <h3 className="text-2xl font-serif italic text-brand-primary">{ui("Mạng lưới tư vấn và hỗ trợ")}</h3>
+              <p className="text-gray-400 text-xs font-semibold">{ui("Sao chép nhanh số liên hệ hoặc mở kết nối gọi khi bạn cần hỗ trợ.")}</p>
             </div>
           </div>
 
@@ -1741,7 +1700,7 @@ const TestTakingView = ({
                       onClick={() => handleCopyNumber(contact.phone)}
                       className="text-xs text-gray-400 hover:text-brand-primary font-black whitespace-nowrap"
                     >
-                      {copySuccess === contact.phone ? 'ĐÃ SAO CHÉP' : 'CHÉP SỐ'}
+                      {copySuccess === contact.phone ? ui("ĐÃ SAO CHÉP") : ui("CHÉP SỐ")}
                     </button>
                   </div>
                   <h4 className="text-lg font-bold text-gray-800 mb-1">{contact.name}</h4>
@@ -1753,29 +1712,26 @@ const TestTakingView = ({
                   onClick={() => setSimulatedCall({ name: contact.name, number: contact.phone })}
                   className="w-full py-3 bg-brand-primary/10 hover:bg-brand-primary text-brand-primary hover:text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all text-center"
                 >
-                  Gọi tư vấn
-                </button>
+                  {ui("Gọi tư vấn")}</button>
               </div>
             ))}
           </div>
         </div>
 
         <div className="flex flex-col sm:flex-row items-center justify-between gap-6 p-6">
-          <button 
+          <button
             onClick={onBack}
             className="w-full sm:w-auto px-12 py-5 bg-brand-primary text-white rounded-2xl font-black text-xs uppercase tracking-[0.2em] hover:shadow-2xl hover:scale-105 transition-all text-center shrink-0"
           >
-            QUAY LẠI TRẠM GIẢI MÃ
-          </button>
+            {ui("QUAY LẠI TRẠM GIẢI MÃ")}</button>
 
           <p className="text-gray-400 text-xs text-center sm:text-right">
-            Kết quả chỉ mang tính sàng lọc sơ bộ và không thay thế kết luận chuyên môn y khoa hoặc tham vấn trực tiếp.
-          </p>
+            {ui("Kết quả chỉ mang tính sàng lọc sơ bộ và không thay thế kết luận chuyên môn y khoa hoặc tham vấn trực tiếp.")}</p>
         </div>
 
         {simulatedCall && (
           <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/40 backdrop-blur-md">
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               className="bg-white p-10 rounded-[3rem] shadow-2xl max-w-lg w-full text-center border border-gray-100 flex flex-col items-center"
@@ -1783,32 +1739,29 @@ const TestTakingView = ({
               <div className="w-24 h-24 bg-brand-primary/10 rounded-full flex items-center justify-center text-brand-primary mb-6 animate-pulse">
                 <PhoneCall size={48} />
               </div>
-              <h3 className="text-2xl font-serif italic text-brand-primary mb-2">Thiết lập liên kết an toàn</h3>
-              <p className="text-gray-400 text-sm font-semibold uppercase tracking-widest mb-6">Trạm An Safe Link</p>
-              
+              <h3 className="text-2xl font-serif italic text-brand-primary mb-2">{ui("Thiết lập liên kết an toàn")}</h3>
+              <p className="text-gray-400 text-sm font-semibold uppercase tracking-widest mb-6">{ui("Trạm An Safe Link")}</p>
+
               <div className="bg-gray-50 p-6 rounded-2xl w-full mb-8 border border-gray-100 text-center">
-                <p className="text-xs text-gray-400 uppercase tracking-widest font-black mb-1">Đường dây hỗ trợ</p>
+                <p className="text-xs text-gray-400 uppercase tracking-widest font-black mb-1">{ui("Đường dây hỗ trợ")}</p>
                 <p className="text-xl font-bold text-gray-800 mb-2">{simulatedCall.name}</p>
                 <p className="text-3xl font-black text-brand-primary tracking-wider">{simulatedCall.number}</p>
               </div>
 
               <p className="text-sm text-gray-500 leading-relaxed mb-8 max-w-sm">
-                Trạm An sẽ mở kết nối gọi trên thiết bị của bạn. Hãy chọn gọi thật nếu bạn đã sẵn sàng trao đổi với kênh hỗ trợ.
-              </p>
+                {ui("Trạm An sẽ mở kết nối gọi trên thiết bị của bạn. Hãy chọn gọi thật nếu bạn đã sẵn sàng trao đổi với kênh hỗ trợ.")}</p>
 
               <div className="flex gap-4 w-full">
-                <button 
+                <button
                   onClick={() => setSimulatedCall(null)}
                   className="flex-1 py-4 bg-gray-100 text-gray-500 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-200 transition-all"
                 >
-                  HỦY LIÊN KẾT
-                </button>
-                <a 
+                  {ui("HỦY LIÊN KẾT")}</button>
+                <a
                   href={`tel:${simulatedCall.number}`}
                   className="flex-1 py-4 bg-emerald-500 hover:bg-emerald-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest text-center flex items-center justify-center gap-2 transition-all shadow-lg shadow-emerald-500/20"
                 >
-                  <Phone size={14} /> GỌI THỰC TẾ
-                </a>
+                  <Phone size={14} /> {ui("GỌI THỰC TẾ")}</a>
               </div>
             </motion.div>
           </div>
@@ -1816,7 +1769,7 @@ const TestTakingView = ({
 
         {showDassPrompt && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/20 backdrop-blur-sm">
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               className="bg-white p-10 rounded-[3rem] shadow-2xl max-w-md w-full text-center border border-gray-100"
@@ -1824,26 +1777,23 @@ const TestTakingView = ({
               <div className="w-20 h-20 bg-brand-orange/10 rounded-full flex items-center justify-center text-brand-orange mx-auto mb-6">
                 <AlertCircle size={40} />
               </div>
-              <h3 className="text-2xl font-serif italic text-brand-primary mb-4">Đánh giá chi tiết hơn</h3>
+              <h3 className="text-2xl font-serif italic text-brand-primary mb-4">{ui("Đánh giá chi tiết hơn")}</h3>
               <p className="text-gray-500 text-sm leading-relaxed mb-8">
-                Dựa trên kết quả của bạn, chúng tôi đề xuất bạn thực hiện thêm bài test DASS-21 để có đánh giá chi tiết hơn về mức độ căng thẳng, lo âu và trầm cảm. Bạn có muốn thực hiện ngay không?
-              </p>
+                {ui("Dựa trên kết quả của bạn, chúng tôi đề xuất bạn thực hiện thêm bài test DASS-21 để có đánh giá chi tiết hơn về mức độ căng thẳng, lo âu và trầm cảm. Bạn có muốn thực hiện ngay không?")}</p>
               <div className="flex gap-4">
-                <button 
+                <button
                   onClick={() => setShowDassPrompt(false)}
                   className="flex-1 py-4 bg-gray-100 text-gray-500 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-200 transition-all"
                 >
-                  BỎ QUA
-                </button>
-                <button 
+                  {ui("BỎ QUA")}</button>
+                <button
                   onClick={() => {
                     setShowDassPrompt(false);
                     if (onTakeDass21) onTakeDass21();
                   }}
                   className="flex-1 py-4 bg-brand-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:shadow-xl hover:shadow-brand-primary/20 transition-all"
                 >
-                  LÀM DASS-21
-                </button>
+                  {ui("LÀM DASS-21")}</button>
               </div>
             </motion.div>
           </div>
@@ -1853,19 +1803,21 @@ const TestTakingView = ({
   }
 
   const currentQuestion = questions[currentQuestionIndex];
+  const retrySave=()=>{if(savePhase==='conflict'){if(window.confirm('Tải lại sẽ bỏ thay đổi chưa lưu của tab này.'))window.location.reload();}else void coordinator?.queue.flush().catch(e=>setSubmitError(e.message));};
   const progress = ((currentQuestionIndex + 1) / questions.length) * 100;
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-20">
+      <p className="muted" role="status">{demo?ui("DEMO: không lưu backend"):savePhase==='saved'?ui("Đã lưu trên backend"):savePhase==='saving'?ui("Đang lưu…"):ui("Chỉ nháp đã được server xác nhận mới khôi phục được.")}</p>
+      {submitError&&<p className="error-note" role="alert">{submitError} {!coordinator?.uncertain&&<button onClick={retrySave}>{savePhase==='conflict'?ui("Tải lại bản lưu"):ui("Thử lưu lại")}</button>}</p>}
       <div className="mb-12">
         <div className="flex items-center justify-between mb-6">
           <button onClick={onBack} className="text-gray-400 hover:text-brand-primary transition-colors flex items-center gap-2 font-bold text-xs uppercase tracking-widest">
-            <ArrowRight size={16} className="rotate-180" /> THOÁT
-          </button>
-          <span className="text-xs font-black text-brand-primary uppercase tracking-widest">CÂU HỎI {currentQuestionIndex + 1} / {questions.length}</span>
+            <ArrowRight size={16} className="rotate-180" /> {ui("THOÁT")}</button>
+          <span className="text-xs font-black text-brand-primary uppercase tracking-widest">{ui("CÂU HỎI")}{' '}{currentQuestionIndex + 1} / {questions.length}</span>
         </div>
         <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-          <motion.div 
+          <motion.div
             initial={{ width: 0 }}
             animate={{ width: `${progress}%` }}
             className="h-full bg-brand-primary"
@@ -1873,22 +1825,23 @@ const TestTakingView = ({
         </div>
       </div>
 
-      <motion.div 
+      <motion.div
         key={currentQuestion.id}
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         className="bg-white p-12 md:p-16 rounded-[4rem] border border-gray-100 shadow-xl"
       >
         <h3 className="text-3xl font-bold text-brand-primary mb-12 leading-tight">{currentQuestion.text}</h3>
-        
+
         <div className="space-y-4">
           {currentQuestion.options.map((option: any) => (
             <button
               key={option.id}
-              onClick={() => handleSelectOption(currentQuestion.id, option.score)}
+              disabled={isSubmitting||coordinator?.uncertain||['conflict','version_changed','expired'].includes(savePhase)}
+              onClick={() => handleSelectOption(currentQuestion.id, option.id)}
               className={cn(
                 "w-full p-6 rounded-3xl text-left font-bold transition-all border-2",
-                answers[currentQuestion.id] === option.score
+                answers[currentQuestion.id] === option.id
                   ? "bg-brand-primary text-white border-brand-primary shadow-lg shadow-brand-primary/20"
                   : "bg-gray-50 text-gray-600 border-transparent hover:border-brand-primary/20 hover:bg-white"
               )}
@@ -1899,17 +1852,16 @@ const TestTakingView = ({
         </div>
 
         <div className="mt-16 flex items-center justify-between">
-          <button 
+          <button
             onClick={handlePrev}
             disabled={currentQuestionIndex === 0 || isSubmitting}
             className="px-8 py-4 text-gray-400 font-black text-xs uppercase tracking-widest disabled:opacity-30"
           >
-            QUAY LẠI
-          </button>
+            {ui("QUAY LẠI")}</button>
           {submitError && (
             <p className="text-xs font-bold text-red-500">{submitError}</p>
           )}
-          <button 
+          <button
             onClick={() => {
               void handleNext();
             }}
@@ -1917,8 +1869,8 @@ const TestTakingView = ({
             className="px-10 py-4 bg-brand-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-brand-primary/20 hover:scale-105 transition-all disabled:opacity-50 disabled:scale-100"
           >
             {isSubmitting
-              ? 'ĐANG NỘP...'
-              : (currentQuestionIndex === questions.length - 1 ? 'HOÀN THÀNH' : 'TIẾP THEO')}
+              ? ui("ĐANG NỘP...")
+              : (currentQuestionIndex === questions.length - 1 ? ui("HOÀN THÀNH") : ui("TIẾP THEO"))}
           </button>
         </div>
       </motion.div>
@@ -1926,23 +1878,23 @@ const TestTakingView = ({
   );
 };
 
-const StudentTestsView = ({ 
-  tests, 
+const StudentTestsView = ({
+  tests,
   onTakeTest,
   userData,
   isLoadingTests,
   testsError,
   setCurrentView,
   onLogout
-}: { 
-  tests: any[], 
+}: {
+  tests: any[],
   onTakeTest: (test: any) => Promise<void> | void,
   userData: any,
   isLoadingTests?: boolean,
   testsError?: string,
   setCurrentView: (view: View) => void,
   onLogout: () => void
-}) => {
+}) => {useLocale();
   const filteredTests = sortTestsKeepingCoreFirst(
     tests.filter((t) => (t.isOpen !== false) && (t.targetAudience === 'Cả hai' || t.targetAudience === userData.role)),
   );
@@ -1955,19 +1907,16 @@ const StudentTestsView = ({
           animate={{ opacity: 1, y: 0 }}
           className="inline-flex items-center gap-2 px-4 py-2 bg-brand-primary/10 text-brand-primary rounded-full text-[10px] font-black uppercase tracking-[0.2em] mb-6"
         >
-          <Zap size={14} /> TRẠM GIẢI MÃ
-        </motion.div>
+          <Zap size={14} /> {ui("TRẠM GIẢI MÃ")}</motion.div>
         <h2 className="text-5xl md:text-6xl font-serif italic text-brand-primary mb-6 leading-tight">
-          Thấu hiểu bản thân qua các bài trắc nghiệm
-        </h2>
+          {ui("Thấu hiểu bản thân qua các bài trắc nghiệm")}</h2>
         <p className="text-gray-500 text-lg max-w-2xl mx-auto leading-relaxed">
-          Khám phá những góc khuất trong tâm hồn, định hướng tương lai và tìm ra cách cân bằng cuộc sống học đường.
-        </p>
+          {ui("Khám phá những góc khuất trong tâm hồn, định hướng tương lai và tìm ra cách cân bằng cuộc sống học đường.")}</p>
       </div>
 
       {isLoadingTests && (
         <div className="text-center py-10">
-          <p className="text-sm font-bold text-gray-500">Đang đồng bộ danh mục bài test...</p>
+          <p className="text-sm font-bold text-gray-500">{ui("Đang đồng bộ danh mục bài test...")}</p>
         </div>
       )}
       {testsError && (
@@ -1978,7 +1927,7 @@ const StudentTestsView = ({
 
       {filteredTests.length === 0 ? (
         <div className="text-center py-20 bg-gray-50 rounded-[4rem] border border-dashed border-gray-200">
-          <p className="text-gray-400 font-bold">Hiện chưa có bài trắc nghiệm nào dành cho bạn.</p>
+          <p className="text-gray-400 font-bold">{ui("Hiện chưa có bài trắc nghiệm nào dành cho bạn.")}</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-10">
@@ -1986,18 +1935,18 @@ const StudentTestsView = ({
             <motion.div
               key={test.id}
               whileHover={{ y: -10 }}
-              className="bg-white p-10 rounded-[3.5rem] border border-gray-100 shadow-sm hover:shadow-2xl transition-all group flex flex-col relative"
+              className="test-card bg-white p-10 rounded-[3.5rem] border border-gray-100 shadow-sm hover:shadow-2xl transition-all group flex flex-col"
             >
-              <div className="absolute top-8 right-8 px-4 py-1.5 bg-brand-primary/10 text-brand-primary rounded-full text-[10px] font-black uppercase tracking-widest">
-                {test.targetAudience === 'Cả hai' ? 'Giáo viên, Học sinh' : test.targetAudience}
+              <div className="test-card-header">
+                <div className={cn("test-card-icon w-20 h-20 rounded-3xl flex items-center justify-center text-white shadow-lg group-hover:scale-110 transition-transform", test.color)}>
+                  {IconMap[test.icon || 'Zap']}
+                </div>
+                <AudienceBadge audience={test.targetAudience}/>
               </div>
-              <div className={cn("w-20 h-20 rounded-3xl flex items-center justify-center text-white shadow-lg mb-10 group-hover:scale-110 transition-transform", test.color)}>
-                {IconMap[test.icon || 'Zap']}
-              </div>
-              
+
               <h3 className="text-2xl font-black text-brand-primary mb-4">{test.title}</h3>
               <p className="text-gray-500 leading-relaxed mb-10 flex-1">{test.desc}</p>
-              
+
               <div className="flex items-center justify-between pt-8 border-t border-gray-50 mb-10">
                 <div className="flex items-center gap-3">
                   <Clock size={18} className="text-brand-orange" />
@@ -2009,14 +1958,13 @@ const StudentTestsView = ({
                 </div>
               </div>
 
-              <button 
+              <button
                 onClick={() => {
                   void onTakeTest(test);
                 }}
                 className="w-full py-5 bg-brand-primary text-white rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl shadow-brand-primary/20 hover:scale-[1.02] active:scale-95 transition-all"
               >
-                BẮT ĐẦU LÀM TEST
-              </button>
+                {ui("BẮT ĐẦU LÀM TEST")}</button>
             </motion.div>
           ))}
         </div>
@@ -2025,14 +1973,14 @@ const StudentTestsView = ({
   );
 };
 
-const ChangePasswordModal = ({ 
-  isOpen, 
-  onClose, 
-  onConfirm, 
-  userName 
-}: { 
-  isOpen: boolean, 
-  onClose: () => void, 
+const ChangePasswordModal = ({
+  isOpen,
+  onClose,
+  onConfirm,
+  userName
+}: {
+  isOpen: boolean,
+  onClose: () => void,
   onConfirm: (password: string) => void,
   userName: string
 }) => {
@@ -2042,14 +1990,14 @@ const ChangePasswordModal = ({
 
   return (
     <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         onClick={onClose}
         className="absolute inset-0 bg-brand-primary/20 backdrop-blur-sm"
       />
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, scale: 0.9, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.9, y: 20 }}
@@ -2060,22 +2008,22 @@ const ChangePasswordModal = ({
             <div className="w-16 h-16 rounded-2xl bg-brand-primary/10 flex items-center justify-center text-brand-primary">
               <Lock size={28} />
             </div>
-            <button 
+            <button
               onClick={onClose}
               className="p-2 text-gray-300 hover:text-gray-500 transition-colors"
             >
               <X size={24} />
             </button>
           </div>
-          
+
           <h3 className="text-2xl font-display font-black text-brand-primary mb-1">Đổi mật khẩu</h3>
           <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-8">Người dùng: {userName}</p>
 
           <div className="space-y-6">
             <div className="space-y-2">
               <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2">Mật khẩu mới</label>
-              <input 
-                type="password" 
+              <input
+                type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Nhập mật khẩu mới..."
@@ -2085,13 +2033,13 @@ const ChangePasswordModal = ({
           </div>
 
           <div className="flex gap-4 mt-10">
-            <button 
+            <button
               onClick={onClose}
               className="flex-1 py-4 bg-gray-50 text-gray-400 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-100 transition-all"
             >
               HỦY
             </button>
-            <button 
+            <button
               onClick={() => {
                 onConfirm(password);
                 setPassword('');
@@ -2108,15 +2056,15 @@ const ChangePasswordModal = ({
   );
 };
 
-const SchoolListView = ({ 
-  schools, 
+const SchoolListView = ({
+  schools,
   onBack,
   userData,
   setCurrentView,
   onLogout,
   setFilterSchoolId
-}: { 
-  schools: any[], 
+}: {
+  schools: any[],
   onBack: () => void,
   userData: any,
   setCurrentView: (view: View) => void,
@@ -2124,16 +2072,16 @@ const SchoolListView = ({
   setFilterSchoolId: (id: string | null) => void
 }) => {
   return (
-    <ManagementLayout 
-      userData={userData} 
-      currentView="school-list" 
+    <ManagementLayout
+      userData={userData}
+      currentView="school-list"
       setCurrentView={setCurrentView}
       onLogout={onLogout}
       setFilterSchoolId={setFilterSchoolId}
     >
       <div className="p-12">
         <div className="flex items-center gap-6 mb-12">
-          <button 
+          <button
             onClick={onBack}
             className="w-12 h-12 rounded-full bg-gray-50 flex items-center justify-center text-gray-400 hover:bg-brand-primary/10 hover:text-brand-primary transition-all"
           >
@@ -2147,8 +2095,8 @@ const SchoolListView = ({
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
           {schools.map((school) => (
-            <div 
-              key={school.id} 
+            <div
+              key={school.id}
               onClick={() => {
                 setFilterSchoolId(school.id);
                 setCurrentView('class-list');
@@ -2185,8 +2133,8 @@ const SchoolListView = ({
   );
 };
 
-const AdminListView = ({ 
-  admins, 
+const AdminListView = ({
+  admins,
   onBack,
   userData,
   setCurrentView,
@@ -2197,8 +2145,8 @@ const AdminListView = ({
   onDeleteAdmin,
   onChangePassword,
   onCreateAdmin
-}: { 
-  admins: any[], 
+}: {
+  admins: any[],
   onBack: () => void,
   userData: any,
   setCurrentView: (view: View) => void,
@@ -2213,16 +2161,16 @@ const AdminListView = ({
   const [selectedAdmin, setSelectedAdmin] = useState<any>(null);
 
   return (
-    <ManagementLayout 
-      userData={userData} 
-      currentView="admin-list" 
+    <ManagementLayout
+      userData={userData}
+      currentView="admin-list"
       setCurrentView={setCurrentView}
       onLogout={onLogout}
       setFilterSchoolId={setFilterSchoolId}
     >
       <div className="p-12">
         <div className="flex items-center gap-6 mb-12">
-          <button 
+          <button
             onClick={onBack}
             className="w-12 h-12 rounded-full bg-gray-50 flex items-center justify-center text-gray-400 hover:bg-brand-primary/10 hover:text-brand-primary transition-all"
           >
@@ -2244,14 +2192,14 @@ const AdminListView = ({
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
           {admins.map((admin) => (
-            <div 
-              key={admin.id} 
+            <div
+              key={admin.id}
               onClick={() => onViewTeachersOfSchool(admin.schoolId)}
               className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm hover:shadow-xl transition-all group relative cursor-pointer"
             >
               {userData.role === 'Quản trị viên cấp cao' && (
                 <div className="absolute top-6 right-6 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                  <button 
+                  <button
                     onClick={(e) => {
                       e.stopPropagation();
                       setSelectedAdmin(admin);
@@ -2261,7 +2209,7 @@ const AdminListView = ({
                   >
                     <Info size={18} />
                   </button>
-                  <button disabled data-unavailable="true" 
+                  <button disabled data-unavailable="true"
                     onClick={(e) => {
                       e.stopPropagation();
                       onChangePassword?.(admin.id, admin.name);
@@ -2271,7 +2219,7 @@ const AdminListView = ({
                   >
                     <Lock size={18} />
                   </button>
-                  <button disabled data-unavailable="true" 
+                  <button disabled data-unavailable="true"
                     onClick={(e) => {
                       e.stopPropagation();
                       onDeleteAdmin?.(admin.id);
@@ -2309,14 +2257,14 @@ const AdminListView = ({
         <AnimatePresence>
           {selectedAdmin && (
             <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 onClick={() => setSelectedAdmin(null)}
                 className="absolute inset-0 bg-brand-primary/20 backdrop-blur-sm"
               />
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0, scale: 0.9, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.9, y: 20 }}
@@ -2327,14 +2275,14 @@ const AdminListView = ({
                     <div className="w-20 h-20 rounded-3xl bg-brand-orange/10 flex items-center justify-center text-brand-orange text-3xl font-black">
                       {selectedAdmin.name.charAt(0)}
                     </div>
-                    <button 
+                    <button
                       onClick={() => setSelectedAdmin(null)}
                       className="p-2 text-gray-300 hover:text-gray-500 transition-colors"
                     >
                       <X size={24} />
                     </button>
                   </div>
-                  
+
                   <h3 className="text-2xl font-display font-black text-brand-primary mb-1">{selectedAdmin.name}</h3>
                   <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-8">{selectedAdmin.role}</p>
 
@@ -2371,7 +2319,7 @@ const AdminListView = ({
                   </div>
 
                   <div className="flex gap-4 mt-10">
-                    <button disabled data-unavailable="true" 
+                    <button disabled data-unavailable="true"
                       onClick={() => {
                         onDeleteAdmin?.(selectedAdmin.id);
                         setSelectedAdmin(null);
@@ -2380,7 +2328,7 @@ const AdminListView = ({
                     >
                       XÓA TÀI KHOẢN
                     </button>
-                    <button 
+                    <button
                       onClick={() => setSelectedAdmin(null)}
                       className="flex-1 py-4 bg-brand-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-brand-primary/20 hover:scale-[1.02] transition-all"
                     >
@@ -2397,10 +2345,10 @@ const AdminListView = ({
   );
 };
 
-const ClassListView = ({ 
-  classes, 
-  students, 
-  teachers, 
+const ClassListView = ({
+  classes,
+  students,
+  teachers,
   onBack,
   onViewClass,
   userData,
@@ -2411,8 +2359,8 @@ const ClassListView = ({
   onChangePassword,
   onRequireAdminPassword,
   initialSelectedClass
-}: { 
-  classes: any[], 
+}: {
+  classes: any[],
   students: any[],
   teachers: any[],
   onBack: () => void,
@@ -2447,16 +2395,16 @@ const ClassListView = ({
 
   const classMembers = useMemo(() => {
     if (!selectedClass) return [];
-    
+
     const classStudents = students
       .filter(s => s.className === selectedClass.name)
       .map(s => ({ ...s, role: 'Học sinh', type: 'student' }));
-      
+
     const classTeachers = teachers
       .filter(t => t.className === selectedClass.name)
-      .map(t => ({ 
-        ...t, 
-        role: 'Giáo viên', 
+      .map(t => ({
+        ...t,
+        role: 'Giáo viên',
         type: 'teacher',
         username: t.username || t.name,
         points: 0,
@@ -2466,15 +2414,15 @@ const ClassListView = ({
         accomType: '-',
         phone: t.phoneNumber || '-'
       }));
-      
+
     return [...classTeachers, ...classStudents];
   }, [students, teachers, selectedClass]);
 
   if (selectedClass) {
     return (
-      <ManagementLayout 
-        userData={userData} 
-        currentView="class-list" 
+      <ManagementLayout
+        userData={userData}
+        currentView="class-list"
         setCurrentView={setCurrentView}
         onLogout={onLogout}
         setFilterSchoolId={setFilterSchoolId}
@@ -2482,7 +2430,7 @@ const ClassListView = ({
         <div className="p-12">
           <div className="flex items-center justify-between mb-12">
             <div className="flex items-center gap-6">
-              <button 
+              <button
                 onClick={() => setSelectedClass(null)}
                 className="w-12 h-12 rounded-full bg-gray-50 flex items-center justify-center text-gray-400 hover:bg-brand-primary/10 hover:text-brand-primary transition-all"
               >
@@ -2496,8 +2444,8 @@ const ClassListView = ({
             <div className="flex items-center gap-4">
               <div className="relative">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   placeholder="Tìm kiếm theo tên hoặc mã..."
                   className="pl-12 pr-6 py-3 bg-white border border-gray-100 rounded-xl text-sm focus:ring-2 focus:ring-brand-primary/20 outline-none w-80"
                 />
@@ -2523,7 +2471,7 @@ const ClassListView = ({
                   <tr key={member.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/30 transition-colors group">
                     <td className="px-8 py-6 text-sm font-bold text-gray-400">{(idx + 1).toString().padStart(2, '0')}</td>
                     <td className="px-8 py-6">
-                      <div 
+                      <div
                         className="flex items-center gap-4 cursor-pointer group/name"
                         onClick={() => handleSelectMember(member)}
                       >
@@ -2559,14 +2507,14 @@ const ClassListView = ({
                       {member.type === 'student' ? (
                         <div className={cn(
                           "inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest",
-                          member.points > 60 ? "bg-red-50 text-red-500" : 
-                          member.points > 40 ? "bg-brand-orange/10 text-brand-orange" : 
+                          member.points > 60 ? "bg-red-50 text-red-500" :
+                          member.points > 40 ? "bg-brand-orange/10 text-brand-orange" :
                           "bg-brand-primary/10 text-brand-primary"
                         )}>
                           <div className={cn(
                             "w-1.5 h-1.5 rounded-full",
-                            member.points > 60 ? "bg-red-500" : 
-                            member.points > 40 ? "bg-brand-orange" : 
+                            member.points > 60 ? "bg-red-500" :
+                            member.points > 40 ? "bg-brand-orange" :
                             "bg-brand-primary"
                           )} />
                           {member.points > 60 ? "Cao" : member.points > 40 ? "Trung bình" : "Thấp"}
@@ -2577,7 +2525,7 @@ const ClassListView = ({
                     </td>
                     <td className="px-8 py-6">
                       <div className="flex items-center justify-center gap-2">
-                        <button 
+                        <button
                           onClick={() => handleSelectMember(member)}
                           className="p-2 text-gray-300 hover:text-brand-primary transition-colors"
                           title="Xem chi tiết"
@@ -2586,14 +2534,14 @@ const ClassListView = ({
                         </button>
                         {userData.role === 'Quản trị viên cấp cao' && (
                           <>
-                            <button disabled data-unavailable="true" 
+                            <button disabled data-unavailable="true"
                               onClick={() => onChangePassword?.(member.id, member.username)}
                               className="p-2 text-gray-300 hover:text-brand-primary transition-colors"
                               title="Đổi mật khẩu"
                             >
                               <Lock size={18} />
                             </button>
-                            <button disabled data-unavailable="true" 
+                            <button disabled data-unavailable="true"
                               onClick={() => onDeleteStudent?.(member.id)}
                               className="p-2 text-gray-300 hover:text-red-500 transition-colors"
                               title="Xóa tài khoản"
@@ -2614,14 +2562,14 @@ const ClassListView = ({
         <AnimatePresence>
           {selectedStudent && (
             <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 onClick={() => setSelectedStudent(null)}
                 className="absolute inset-0 bg-brand-primary/20 backdrop-blur-sm"
               />
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0, scale: 0.9, y: 20 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.9, y: 20 }}
@@ -2632,7 +2580,7 @@ const ClassListView = ({
                     <div className="w-20 h-20 rounded-3xl bg-brand-orange/10 flex items-center justify-center text-brand-orange text-3xl font-black">
                       {selectedStudent.username.charAt(0).toUpperCase()}
                     </div>
-                    <button 
+                    <button
                       onClick={() => {
                         setSelectedStudent(null);
                         setIsEditingStudent(false);
@@ -2642,7 +2590,7 @@ const ClassListView = ({
                       <X size={24} />
                     </button>
                   </div>
-                  
+
                   <h3 className="text-2xl font-display font-black text-brand-primary mb-1">@{selectedStudent.username}</h3>
                   <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-8">Học sinh lớp {selectedStudent.className}</p>
 
@@ -2651,8 +2599,8 @@ const ClassListView = ({
                       <div className="space-y-4">
                         <div>
                           <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Số điện thoại</label>
-                          <input 
-                            type="text" 
+                          <input
+                            type="text"
                             value={selectedStudent.phone || ''}
                             onChange={(e) => setSelectedStudent({...selectedStudent, phone: e.target.value})}
                             className="w-full px-4 py-3 rounded-xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none font-bold text-gray-700"
@@ -2660,8 +2608,8 @@ const ClassListView = ({
                         </div>
                         <div>
                           <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Ngày sinh</label>
-                          <input 
-                            type="text" 
+                          <input
+                            type="text"
                             value={selectedStudent.dob || ''}
                             onChange={(e) => setSelectedStudent({...selectedStudent, dob: e.target.value})}
                             className="w-full px-4 py-3 rounded-xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none font-bold text-gray-700"
@@ -2669,8 +2617,8 @@ const ClassListView = ({
                         </div>
                         <div>
                           <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Địa chỉ</label>
-                          <input 
-                            type="text" 
+                          <input
+                            type="text"
                             value={selectedStudent.location || ''}
                             onChange={(e) => setSelectedStudent({...selectedStudent, location: e.target.value})}
                             className="w-full px-4 py-3 rounded-xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none font-bold text-gray-700"
@@ -2714,7 +2662,7 @@ const ClassListView = ({
 
                   <div className="flex gap-4 mt-10">
                     {isEditingStudent ? (
-                      <button 
+                      <button
                         onClick={() => {
                           // Save logic here if needed, for now just toggle back
                           setIsEditingStudent(false);
@@ -2725,7 +2673,7 @@ const ClassListView = ({
                       </button>
                     ) : (
                       <>
-                        <button disabled data-unavailable="true" 
+                        <button disabled data-unavailable="true"
                           onClick={() => {
                             onDeleteStudent?.(selectedStudent.id);
                             setSelectedStudent(null);
@@ -2734,7 +2682,7 @@ const ClassListView = ({
                         >
                           XÓA TÀI KHOẢN
                         </button>
-                        <button 
+                        <button
                           onClick={() => setIsEditingStudent(true)}
                           className="flex-1 py-4 bg-brand-orange text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-brand-orange/20 hover:scale-[1.02] transition-all"
                         >
@@ -2742,7 +2690,7 @@ const ClassListView = ({
                         </button>
                       </>
                     )}
-                    <button 
+                    <button
                       onClick={() => {
                         setSelectedStudent(null);
                         setIsEditingStudent(false);
@@ -2772,7 +2720,7 @@ const ClassListView = ({
       }
       groups[grade].push(cls);
     });
-    
+
     // Sort groups by grade number
     return Object.keys(groups).sort((a, b) => {
       if (a === 'Khác') return 1;
@@ -2787,16 +2735,16 @@ const ClassListView = ({
   }, [classes]);
 
   return (
-    <ManagementLayout 
-      userData={userData} 
-      currentView="class-list" 
+    <ManagementLayout
+      userData={userData}
+      currentView="class-list"
       setCurrentView={setCurrentView}
       onLogout={onLogout}
       setFilterSchoolId={setFilterSchoolId}
     >
       <div className="p-12">
         <div className="flex items-center gap-6 mb-12">
-          <button 
+          <button
             onClick={onBack}
             className="w-12 h-12 rounded-full bg-gray-50 flex items-center justify-center text-gray-400 hover:bg-brand-primary/10 hover:text-brand-primary transition-all"
           >
@@ -2813,10 +2761,10 @@ const ClassListView = ({
             const isExpanded = expandedGrades.includes(group.grade);
             return (
               <div key={group.grade} className="bg-white rounded-[2.5rem] border border-gray-100 shadow-sm overflow-hidden">
-                <button 
+                <button
                   onClick={() => {
-                    setExpandedGrades(prev => 
-                      prev.includes(group.grade) 
+                    setExpandedGrades(prev =>
+                      prev.includes(group.grade)
                         ? prev.filter(g => g !== group.grade)
                         : [...prev, group.grade]
                     );
@@ -2831,7 +2779,7 @@ const ClassListView = ({
                     <ChevronDown size={20} />
                   </div>
                 </button>
-                
+
                 <AnimatePresence>
                   {isExpanded && (
                     <motion.div
@@ -2842,8 +2790,8 @@ const ClassListView = ({
                     >
                       <div className="p-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                         {group.classes.map((cls) => (
-                          <div 
-                            key={cls.id} 
+                          <div
+                            key={cls.id}
                             onClick={() => setSelectedClass(cls)}
                             className="bg-gray-50 p-8 rounded-[2.5rem] border border-gray-100 shadow-sm hover:shadow-xl hover:bg-white transition-all group cursor-pointer"
                           >
@@ -2855,8 +2803,8 @@ const ClassListView = ({
                                 <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">STRESS TB</p>
                                 <p className={cn(
                                   "text-xl font-black",
-                                  cls.avgStress > 60 ? "text-red-500" : cls.avgStress > 40 ? "text-brand-orange" : "text-brand-primary"
-                                )}>{cls.avgStress}</p>
+                                  "text-slate-600"
+                                )}>{cls.avgStress==null?'Chưa duyệt':cls.avgStress}</p>
                               </div>
                             </div>
                             <div className="space-y-4">
@@ -2890,76 +2838,73 @@ const ClassListView = ({
   );
 };
 
-const TestListView = ({ 
-  tests, 
-  onEdit, 
-  onDelete, 
+const TestListView = ({
+  tests,
+  onEdit,
+  onDelete,
   onToggle,
   userData,
   setCurrentView,
   onLogout,
   setFilterSchoolId
-}: { 
-  tests: any[], 
-  onEdit: (test: any) => void, 
+}: {
+  tests: any[],
+  onEdit: (test: any) => void,
   onDelete: (id: string) => void,
   onToggle: (id: string) => void,
   userData: any,
   setCurrentView: (view: View) => void,
   onLogout: () => void,
   setFilterSchoolId: (id: string | null) => void
-}) => {
+}) => {useLocale();
   const orderedTests = sortTestsKeepingCoreFirst(tests);
   return (
-    <ManagementLayout 
-      userData={userData} 
-      currentView="test-list" 
+    <ManagementLayout
+      userData={userData}
+      currentView="test-list"
       setCurrentView={setCurrentView}
       onLogout={onLogout}
       setFilterSchoolId={setFilterSchoolId}
     >
-      <div className="p-12">
-        <div className="flex items-center justify-between mb-12">
+      <div className="test-management p-12">
+        <div className="test-management-heading flex items-center justify-between mb-12">
           <div>
-            <h2 className="text-4xl font-display font-black text-brand-primary">Quản lý Bài test</h2>
-            <p className="text-gray-500">Tạo và chỉnh sửa các bài trắc nghiệm tâm lý.</p>
+            <h2 className="text-4xl font-display font-black text-brand-primary">{ui("Quản lý Bài test")}</h2>
+            <p className="text-gray-500">{ui("Tạo và chỉnh sửa các bài trắc nghiệm tâm lý.")}</p>
           </div>
-          <button 
+          <button
             onClick={() => onEdit(null)}
             className="px-8 py-4 bg-brand-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:shadow-xl transition-all shadow-lg shadow-brand-primary/20 flex items-center gap-3"
           >
-            <Zap size={18} /> THÊM BÀI TEST MỚI
-          </button>
+            <Zap size={18} /> {ui("THÊM BÀI TEST MỚI")}</button>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
           {orderedTests.map((test) => (
-            <div 
-              key={test.id} 
-              className={cn(
-                "bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm hover:shadow-xl transition-all group relative",
-                !test.isOpen && "opacity-75 grayscale-[0.5]"
-              )}
+            <div
+              key={test.id}
+              data-state={test.isOpen?'open':'closed'}
+              className="test-card bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm hover:shadow-xl transition-all group"
             >
-              <div className="absolute top-6 right-6 px-3 py-1 bg-brand-primary/10 text-brand-primary rounded-full text-[10px] font-black uppercase tracking-widest">
-                {test.targetAudience === 'Cả hai' ? 'Giáo viên, Học sinh' : test.targetAudience}
-              </div>
-              <div className="flex items-center justify-between mb-6">
-                <div className={cn("w-16 h-16 rounded-2xl flex items-center justify-center text-white shadow-lg", test.color)}>
+              <div className="test-card-header">
+                <div className={cn("test-card-icon w-16 h-16 rounded-2xl flex items-center justify-center text-white shadow-lg", test.color)}>
                   {IconMap[test.icon || 'Zap']}
                 </div>
-                <div className="flex gap-2 mt-8">
+                <div className="test-card-labels"><AudienceBadge audience={test.targetAudience}/><span className="test-state-badge">{test.isOpen?ui("Đang mở"):ui("Đã đóng")}</span></div>
+                <div className="test-card-actions flex gap-2">
                   {(userData.role === 'Quản trị viên cấp cao' || !test.isPredefined) && (
                     <>
-                      <button 
+                      <button
                         onClick={() => onEdit(test)}
-                        className="p-2 text-gray-300 hover:text-brand-primary transition-colors"
+                        aria-label={`Chỉnh sửa ${test.title}`}
+                        className="p-2 text-gray-600 hover:text-brand-primary transition-colors"
                       >
                         <Settings size={20} />
                       </button>
-                      <button 
+                      <button
                         onClick={() => onDelete(test.id)}
-                        className="p-2 text-gray-300 hover:text-red-500 transition-colors"
+                        aria-label={`Xóa ${test.title}`}
+                        className="p-2 text-gray-600 hover:text-red-700 transition-colors"
                       >
                         <Trash2 size={20} />
                       </button>
@@ -2967,13 +2912,13 @@ const TestListView = ({
                   )}
                 </div>
               </div>
-              
+
               <h3 className="text-xl font-black text-brand-primary mb-2">{test.title}</h3>
               <p className="text-sm text-gray-400 font-medium mb-6 line-clamp-2">{test.desc}</p>
               <p className="text-[10px] font-black text-gray-300 uppercase tracking-widest mb-4">
-                Phiên bản: v{Number(test.versionCount || 0)}
+                {ui("Phiên bản: v")}{' '}{Number(test.versionCount || 0)}
               </p>
-              
+
               <div className="flex items-center justify-between pt-6 border-t border-gray-50">
                 <div className="flex items-center gap-2">
                   <Clock size={14} className="text-brand-orange" />
@@ -2982,22 +2927,22 @@ const TestListView = ({
                 <div className="flex items-center gap-2">
                   <Users size={14} className="text-brand-secondary" />
                   <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                    {test.targetAudience === 'Cả hai' ? 'Giáo viên, Học sinh' : test.targetAudience}
+                    {test.targetAudience === 'Cả hai' ? ui("Giáo viên, Học sinh") : test.targetAudience}
                   </span>
                 </div>
               </div>
 
               <div className="mt-6">
-                <button 
+                <button
                   onClick={() => onToggle(test.id)}
                   className={cn(
                     "w-full py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
-                    test.isOpen 
-                      ? "bg-gray-50 text-gray-400 hover:bg-red-50 hover:text-red-500" 
+                    test.isOpen
+                      ? "bg-gray-50 text-gray-600 hover:bg-red-50 hover:text-red-700"
                       : "bg-brand-primary/10 text-brand-primary hover:bg-brand-primary hover:text-white"
                   )}
                 >
-                  {test.isOpen ? 'ĐÓNG BÀI TEST' : 'MỞ BÀI TEST'}
+                  {test.isOpen ? ui("ĐÓNG BÀI TEST") : ui("MỞ BÀI TEST")}
                 </button>
               </div>
             </div>
@@ -3008,14 +2953,14 @@ const TestListView = ({
   );
 };
 
-const ReportsView = ({ 
+const ReportsView = ({
   userData,
   setCurrentView,
   onLogout,
   setFilterSchoolId,
   teachers,
   testResults
-}: { 
+}: {
   userData: any,
   setCurrentView: (view: View) => void,
   onLogout: () => void,
@@ -3129,30 +3074,7 @@ const ReportsView = ({
     return value || 'unknown';
   };
 
-  const fallbackAttempts = useMemo(() => {
-    return (testResults || []).map((item) => ({
-      attemptId: item.id,
-      userId: item.userId,
-      userRole: normalizeRole(item.userRole || ''),
-      username: item.username || '',
-      userName: item.userName || '',
-      school: item.userSchool || '',
-      className: item.userClass || '',
-      templateId: item.testId,
-      templateTitle: item.testTitle,
-      scoreTotal: Number(item.score || 0),
-      scoreLevel: item.scoreLevel || '',
-      scorePayload: item.scorePayload || {},
-      suggestDass21: Boolean(item.suggestDass21),
-      submittedAt: new Date(item.timestamp || Date.now()).toISOString(),
-      riskLevel: Number(item.score || 0) >= 10 ? 'high' as const : (Number(item.score || 0) >= 5 ? 'medium' as const : 'low' as const),
-      isHighRisk: Number(item.score || 0) >= 10,
-    }));
-  }, [testResults]);
-
-  const attempts = reportData?.attempts && reportData.attempts.length > 0
-    ? reportData.attempts
-    : fallbackAttempts;
+  const attempts = reportData?.attempts ?? [];
 
   const studentAttempts = attempts.filter((item) => normalizeRole(item.userRole) === 'student');
   const teacherAttempts = attempts.filter((item) => normalizeRole(item.userRole) === 'teacher');
@@ -3212,7 +3134,7 @@ const ReportsView = ({
     return {
       ...test,
       name: `${test.label} (${test.code})`,
-      value: items.filter(isWatchLevel).length,
+      value: null,
       attemptCount: items.length,
       avgScore: averageScore(items),
     };
@@ -3234,46 +3156,7 @@ const ReportsView = ({
     return Number.isFinite(nested) ? nested : null;
   };
 
-  const teacherKeyIssues = [
-    {
-      label: 'Stress',
-      fill: '#EF4444',
-      value: teacherDassAttempts.filter((item) => {
-        const score = readNestedScore((item as any).scorePayload, 'stress');
-        return score !== null && score >= 19;
-      }).length,
-    },
-    {
-      label: 'Lo âu',
-      fill: '#F59E0B',
-      value: teacherDassAttempts.filter((item) => {
-        const score = readNestedScore((item as any).scorePayload, 'anxiety');
-        return score !== null && score >= 10;
-      }).length,
-    },
-    {
-      label: 'Trầm cảm',
-      fill: '#6B7280',
-      value: teacherDassAttempts.filter((item) => {
-        const score = readNestedScore((item as any).scorePayload, 'depression');
-        return score !== null && score >= 14;
-      }).length,
-    },
-    {
-      label: 'DASS-21 tổng',
-      fill: '#EC4899',
-      value: teacherDassAttempts.filter((item) => {
-        const hasSubscale = ['stress', 'anxiety', 'depression']
-          .some((key) => readNestedScore((item as any).scorePayload, key) !== null);
-        return !hasSubscale && isWatchLevel(item);
-      }).length,
-    },
-    {
-      label: 'Burnout / MBI',
-      fill: '#8B5CF6',
-      value: teacherMbiAttempts.filter(isWatchLevel).length,
-    },
-  ].filter((item) => item.value > 0);
+  const teacherKeyIssues: {label:string;fill:string;value:number}[] = []; // Interpretation is not approved; no inferred clinical thresholds.
 
   const genderHeatmapData = useMemo(() => {
     const rows = standardStudentTests.map((test) => ({
@@ -3341,9 +3224,9 @@ const ReportsView = ({
   );
 
   return (
-    <ManagementLayout 
-      userData={userData} 
-      currentView="reports" 
+    <ManagementLayout
+      userData={userData}
+      currentView="reports"
       setCurrentView={setCurrentView}
       onLogout={onLogout}
       setFilterSchoolId={setFilterSchoolId}
@@ -3434,11 +3317,11 @@ const ReportsView = ({
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             <ChartCard title="Số lượt học sinh cần theo dõi theo từng vấn đề" subtitle="Chỉ tính kết quả ở mức cao hoặc rất cao, không dùng số liệu giả." accent="#18A5A7">
-              {studentIssueData.length === 0 ? (
+              {studentIssueData.length === 0 || studentIssueData.every(item=>item.value===null) ? (
                 <EmptyChartState title="Chưa có dữ liệu học sinh" description="Chưa có kết quả PHQ-9, GAD-7, DASS-21 hoặc SDQ-25 trong khoảng lọc hiện tại." />
               ) : (
                 <>
-                  <div className="w-full h-[300px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={studentIssueData}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" /><XAxis dataKey="code" axisLine={false} tickLine={false} tick={{ fill: '#6b7280', fontSize: 11, fontWeight: 700 }} /><YAxis axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12, fontWeight: 700 }} allowDecimals={false} /><Tooltip cursor={{ fill: '#f9fafb' }} contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} /><Bar dataKey="value" radius={[10, 10, 0, 0]} barSize={45} name="Cần theo dõi">{studentIssueData.map((entry, index) => (<Cell key={`student-issue-${index}`} fill={entry.fill} />))}</Bar></BarChart></ResponsiveContainer></div>
+                  <div className="w-full h-[300px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={studentIssueData}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" /><XAxis dataKey="code" axisLine={false} tickLine={false} tick={{ fill: '#6b7280', fontSize: 11, fontWeight: 700 }} /><YAxis axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12, fontWeight: 700 }} allowDecimals={false} /><Tooltip cursor={{ fill: '#f9fafb' }} contentStyle={{backgroundColor:'var(--ui-surface)',color:'var(--ui-text)', borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} /><Bar dataKey="value" radius={[10, 10, 0, 0]} barSize={45} name="Cần theo dõi">{studentIssueData.map((entry, index) => (<Cell key={`student-issue-${index}`} fill={entry.fill} />))}</Bar></BarChart></ResponsiveContainer></div>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6 pt-6 border-t border-gray-50">{studentIssueData.map((item) => (<div key={item.kind} className="text-center"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest truncate">{item.label}</p><p className="text-xl font-black text-gray-800 mt-1">{item.value}/{item.attemptCount}</p><p className="text-[10px] text-gray-400 font-bold mt-1">Điểm TB: {item.avgScore}</p></div>))}</div>
                 </>
               )}
@@ -3449,7 +3332,7 @@ const ReportsView = ({
                 <EmptyChartState title="Chưa có dữ liệu phân loại" description="Cần có kết quả bài test chuẩn để phân bổ theo mức thấp, trung bình, cao và rất cao." />
               ) : (
                 <>
-                  <div className="w-full h-[300px] flex items-center justify-center"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={studentSeverityData} cx="50%" cy="50%" innerRadius={70} outerRadius={105} paddingAngle={5} dataKey="value">{studentSeverityData.map((entry, index) => (<Cell key={`student-severity-${index}`} fill={entry.fill} />))}</Pie><Tooltip contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} /></PieChart></ResponsiveContainer></div>
+                  <div className="w-full h-[300px] flex items-center justify-center"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={studentSeverityData} cx="50%" cy="50%" innerRadius={70} outerRadius={105} paddingAngle={5} dataKey="value">{studentSeverityData.map((entry, index) => (<Cell key={`student-severity-${index}`} fill={entry.fill} />))}</Pie><Tooltip contentStyle={{backgroundColor:'var(--ui-surface)',color:'var(--ui-text)', borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} /></PieChart></ResponsiveContainer></div>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-2 text-center pt-6 border-t border-gray-50">{studentSeverityData.map((item) => (<div key={item.name}><div className="flex items-center justify-center gap-1.5"><div className="w-2 h-2 rounded-full" style={{ backgroundColor: item.fill }}></div><span className="text-[10px] font-bold text-gray-400 uppercase">{item.name}</span></div><p className="text-lg font-black text-gray-800 mt-1">{item.value} lượt</p></div>))}</div>
                 </>
               )}
@@ -3458,7 +3341,7 @@ const ReportsView = ({
 
           <div className="bg-white p-8 md:p-12 rounded-[3.5rem] border border-gray-100 shadow-sm">
             <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2 mb-8"><span className="w-2.5 h-2.5 rounded-full bg-brand-orange"></span>Xu hướng lượt làm bài của học sinh</h3>
-            {studentBarData.length === 0 ? (<EmptyChartState title="Chưa có dữ liệu theo tháng" description="Backend chưa trả dữ liệu lượt làm bài học sinh theo tháng trong khoảng lọc hiện tại." />) : (<div className="w-full h-[320px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={studentBarData}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12, fontWeight: 700 }} /><YAxis axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12, fontWeight: 700 }} allowDecimals={false} /><Tooltip cursor={{ fill: '#f9fafb' }} contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} /><Bar dataKey="value" fill="#18A5A7" radius={[10, 10, 0, 0]} barSize={40} name="Lượt làm" /></BarChart></ResponsiveContainer></div>)}
+            {studentBarData.length === 0 ? (<EmptyChartState title="Chưa có dữ liệu theo tháng" description="Backend chưa trả dữ liệu lượt làm bài học sinh theo tháng trong khoảng lọc hiện tại." />) : (<div className="w-full h-[320px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={studentBarData}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12, fontWeight: 700 }} /><YAxis axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12, fontWeight: 700 }} allowDecimals={false} /><Tooltip cursor={{ fill: '#f9fafb' }} contentStyle={{backgroundColor:'var(--ui-surface)',color:'var(--ui-text)', borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} /><Bar dataKey="value" fill="#18A5A7" radius={[10, 10, 0, 0]} barSize={40} name="Lượt làm" /></BarChart></ResponsiveContainer></div>)}
           </div>
 
           {genderHeatmapData.length > 0 && (
@@ -3477,13 +3360,13 @@ const ReportsView = ({
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            <ChartCard title="Mức độ Burnout tổng thể" subtitle="Dựa trên bài MBI/Burnout nếu hệ thống đã có kết quả." accent="#F59E0B">{teacherMbiSeverityData.length === 0 ? (<EmptyChartState title="Chưa có dữ liệu Burnout/MBI" description="Khi giáo viên hoàn thành bài MBI/Burnout, biểu đồ phân bổ mức độ sẽ xuất hiện tại đây." />) : (<div className="w-full h-[300px]"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={teacherMbiSeverityData} cx="50%" cy="50%" innerRadius={70} outerRadius={105} paddingAngle={5} dataKey="value">{teacherMbiSeverityData.map((entry, index) => (<Cell key={`teacher-mbi-${index}`} fill={entry.fill} />))}</Pie><Tooltip contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} /></PieChart></ResponsiveContainer></div>)}</ChartCard>
-            <ChartCard title="Mức độ căng thẳng tâm lý" subtitle="Dựa trên bài DASS-21 dành cho giáo viên." accent="#3B82F6">{teacherDassSeverityData.length === 0 ? (<EmptyChartState title="Chưa có dữ liệu DASS-21 giáo viên" description="Khi giáo viên hoàn thành DASS-21, biểu đồ phân bổ mức độ căng thẳng sẽ xuất hiện tại đây." />) : (<div className="w-full h-[300px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={teacherDassSeverityData}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#6b7280', fontSize: 11, fontWeight: 700 }} /><YAxis axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12, fontWeight: 700 }} allowDecimals={false} /><Tooltip cursor={{ fill: '#f9fafb' }} contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} /><Bar dataKey="value" radius={[10, 10, 0, 0]} barSize={45} name="Lượt làm">{teacherDassSeverityData.map((entry, index) => (<Cell key={`teacher-dass-${index}`} fill={entry.fill} />))}</Bar></BarChart></ResponsiveContainer></div>)}</ChartCard>
+            <ChartCard title="Mức độ Burnout tổng thể" subtitle="Dựa trên bài MBI/Burnout nếu hệ thống đã có kết quả." accent="#F59E0B">{teacherMbiSeverityData.length === 0 ? (<EmptyChartState title="Chưa có dữ liệu Burnout/MBI" description="Khi giáo viên hoàn thành bài MBI/Burnout, biểu đồ phân bổ mức độ sẽ xuất hiện tại đây." />) : (<div className="w-full h-[300px]"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={teacherMbiSeverityData} cx="50%" cy="50%" innerRadius={70} outerRadius={105} paddingAngle={5} dataKey="value">{teacherMbiSeverityData.map((entry, index) => (<Cell key={`teacher-mbi-${index}`} fill={entry.fill} />))}</Pie><Tooltip contentStyle={{backgroundColor:'var(--ui-surface)',color:'var(--ui-text)', borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} /></PieChart></ResponsiveContainer></div>)}</ChartCard>
+            <ChartCard title="Mức độ căng thẳng tâm lý" subtitle="Dựa trên bài DASS-21 dành cho giáo viên." accent="#3B82F6">{teacherDassSeverityData.length === 0 ? (<EmptyChartState title="Chưa có dữ liệu DASS-21 giáo viên" description="Khi giáo viên hoàn thành DASS-21, biểu đồ phân bổ mức độ căng thẳng sẽ xuất hiện tại đây." />) : (<div className="w-full h-[300px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={teacherDassSeverityData}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#6b7280', fontSize: 11, fontWeight: 700 }} /><YAxis axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12, fontWeight: 700 }} allowDecimals={false} /><Tooltip cursor={{ fill: '#f9fafb' }} contentStyle={{backgroundColor:'var(--ui-surface)',color:'var(--ui-text)', borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} /><Bar dataKey="value" radius={[10, 10, 0, 0]} barSize={45} name="Lượt làm">{teacherDassSeverityData.map((entry, index) => (<Cell key={`teacher-dass-${index}`} fill={entry.fill} />))}</Bar></BarChart></ResponsiveContainer></div>)}</ChartCard>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            <div className="bg-white p-8 md:p-12 rounded-[3.5rem] border border-gray-100 shadow-sm flex flex-col"><h3 className="text-lg font-bold text-gray-800 mb-8 flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-violet-500"></span>Các vấn đề nổi bật ở giáo viên</h3>{teacherKeyIssues.length === 0 ? (<EmptyChartState title="Chưa có vấn đề nổi bật" description="Chưa có kết quả DASS-21 hoặc MBI/Burnout ở mức cần theo dõi trong khoảng lọc hiện tại." />) : (<div className="w-full h-[350px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={teacherKeyIssues} layout="vertical"><CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f3f4f6" /><XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12, fontWeight: 700 }} allowDecimals={false} /><YAxis dataKey="label" type="category" axisLine={false} tickLine={false} tick={{ fill: '#1f2937', fontSize: 11, fontWeight: 700 }} width={150} /><Tooltip cursor={{ fill: '#f9fafb' }} contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} /><Bar dataKey="value" radius={[0, 10, 10, 0]} barSize={25} name="Cần theo dõi">{teacherKeyIssues.map((entry, index) => (<Cell key={`teacher-issue-${index}`} fill={entry.fill} />))}</Bar></BarChart></ResponsiveContainer></div>)}</div>
-            <div className="bg-white p-8 md:p-12 rounded-[3.5rem] border border-gray-100 shadow-sm flex flex-col"><h3 className="text-lg font-bold text-gray-800 mb-8 flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-brand-primary"></span>Xu hướng điểm trung bình giáo viên</h3>{teacherMonthlyData.length === 0 ? (<EmptyChartState title="Chưa có dữ liệu theo tháng" description="Backend chưa trả dữ liệu điểm trung bình giáo viên theo tháng trong khoảng lọc hiện tại." />) : (<div className="w-full h-[350px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={teacherMonthlyData}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12, fontWeight: 700 }} /><YAxis axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12, fontWeight: 700 }} /><Tooltip cursor={{ fill: '#f9fafb' }} contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} /><Bar dataKey="value" fill="#F59E0B" radius={[10, 10, 0, 0]} barSize={40} name="Điểm TB" /></BarChart></ResponsiveContainer></div>)}</div>
+            <div className="bg-white p-8 md:p-12 rounded-[3.5rem] border border-gray-100 shadow-sm flex flex-col"><h3 className="text-lg font-bold text-gray-800 mb-8 flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-violet-500"></span>Các vấn đề nổi bật ở giáo viên</h3>{teacherKeyIssues.length === 0 ? (<EmptyChartState title="Chưa duyệt diễn giải" description="Không suy ra vấn đề hoặc mức độ từ tổng điểm chưa được duyệt." />) : (<div className="w-full h-[350px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={teacherKeyIssues} layout="vertical"><CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f3f4f6" /><XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12, fontWeight: 700 }} allowDecimals={false} /><YAxis dataKey="label" type="category" axisLine={false} tickLine={false} tick={{ fill: '#1f2937', fontSize: 11, fontWeight: 700 }} width={150} /><Tooltip cursor={{ fill: '#f9fafb' }} contentStyle={{backgroundColor:'var(--ui-surface)',color:'var(--ui-text)', borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} /><Bar dataKey="value" radius={[0, 10, 10, 0]} barSize={25} name="Cần theo dõi">{teacherKeyIssues.map((entry, index) => (<Cell key={`teacher-issue-${index}`} fill={entry.fill} />))}</Bar></BarChart></ResponsiveContainer></div>)}</div>
+            <div className="bg-white p-8 md:p-12 rounded-[3.5rem] border border-gray-100 shadow-sm flex flex-col"><h3 className="text-lg font-bold text-gray-800 mb-8 flex items-center gap-2"><span className="w-2.5 h-2.5 rounded-full bg-brand-primary"></span>Xu hướng điểm trung bình giáo viên</h3>{teacherMonthlyData.length === 0 ? (<EmptyChartState title="Chưa có dữ liệu theo tháng" description="Backend chưa trả dữ liệu điểm trung bình giáo viên theo tháng trong khoảng lọc hiện tại." />) : (<div className="w-full h-[350px]"><ResponsiveContainer width="100%" height="100%"><BarChart data={teacherMonthlyData}><CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" /><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12, fontWeight: 700 }} /><YAxis axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 12, fontWeight: 700 }} /><Tooltip cursor={{ fill: '#f9fafb' }} contentStyle={{backgroundColor:'var(--ui-surface)',color:'var(--ui-text)', borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }} /><Bar dataKey="value" fill="#F59E0B" radius={[10, 10, 0, 0]} barSize={40} name="Điểm TB" /></BarChart></ResponsiveContainer></div>)}</div>
           </div>
         </section>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -3534,7 +3417,7 @@ const ReportsView = ({
                 <div className="flex flex-wrap items-center gap-3 justify-between">
                   <p className="text-sm font-black text-red-600">@{alert.username} - {alert.templateTitle}</p>
                   <span className="text-[10px] font-black uppercase tracking-widest text-red-500">
-                    {new Date(alert.submittedAt).toLocaleString('vi-VN')}
+                    {formatDate(alert.submittedAt)}
                   </span>
                 </div>
                 <p className="text-sm text-gray-600 mt-2">
@@ -3582,17 +3465,17 @@ const NotificationBoard = ({ onClose }: { onClose: () => void }) => {
   );
 };
 
-const ManagementLayout = ({ 
-  children, 
-  userData, 
-  currentView, 
-  setCurrentView, 
+const ManagementLayout = ({
+  children,
+  userData,
+  currentView,
+  setCurrentView,
   onLogout,
   setFilterSchoolId
-}: { 
-  children: React.ReactNode, 
-  userData: any, 
-  currentView: View, 
+}: {
+  children: React.ReactNode,
+  userData: any,
+  currentView: View,
   setCurrentView: (view: View) => void,
   onLogout: () => void,
   setFilterSchoolId: (id: string | null) => void
@@ -3641,7 +3524,7 @@ const ManagementLayout = ({
       {/* Sidebar */}
       <aside className="w-72 bg-white border-r border-gray-100 flex flex-col sticky top-0 h-screen z-50">
         <div className="p-8">
-          <button 
+          <button
             onClick={() => {
               setFilterSchoolId(null);
               setCurrentView(defaultDashboardView as View);
@@ -3671,8 +3554,8 @@ const ManagementLayout = ({
               }}
               className={cn(
                 "w-full flex items-center gap-4 px-6 py-4 rounded-2xl text-sm font-bold transition-all group",
-                currentView === item.id 
-                  ? "bg-brand-primary text-white shadow-lg shadow-brand-primary/20" 
+                currentView === item.id
+                  ? "bg-brand-primary text-white shadow-lg shadow-brand-primary/20"
                   : "text-gray-400 hover:bg-gray-50 hover:text-brand-primary"
               )}
             >
@@ -3685,7 +3568,7 @@ const ManagementLayout = ({
         </nav>
 
         <div className="p-6 border-t border-gray-50">
-          <button 
+          <button
             onClick={onLogout}
             className="w-full flex items-center gap-4 px-6 py-4 rounded-2xl text-sm font-bold text-gray-400 hover:bg-red-50 hover:text-red-500 transition-all group"
           >
@@ -3705,9 +3588,9 @@ const ManagementLayout = ({
           <div className="flex-1 max-w-xl">
             <div className="relative group">
               <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-brand-primary transition-colors" size={20} />
-              <input 
-                type="text" 
-                placeholder="Tìm kiếm..." 
+              <input
+                type="text"
+                placeholder="Tìm kiếm..."
                 className="w-full bg-gray-50 border-none rounded-2xl py-4 pl-14 pr-6 text-sm font-medium focus:ring-2 focus:ring-brand-primary/20 transition-all"
               />
             </div>
@@ -3716,23 +3599,23 @@ const ManagementLayout = ({
           <div className="flex items-center gap-8">
             <div className="flex items-center gap-4">
               <div className="relative">
-                <button 
-                  onClick={() => setShowNotifications(!showNotifications)}
+                <button
+                  disabled title="Chưa có dịch vụ thông báo" onClick={() => setShowNotifications(!showNotifications)}
                   className={cn(
                     "w-12 h-12 rounded-2xl flex items-center justify-center transition-all relative",
                     showNotifications ? "bg-brand-primary text-white shadow-lg shadow-brand-primary/20" : "bg-gray-50 text-gray-400 hover:bg-brand-primary/10 hover:text-brand-primary"
                   )}
                 >
                   <Bell size={22} />
-                  {!showNotifications && <span className="absolute top-3 right-3 w-2.5 h-2.5 bg-brand-orange rounded-full border-2 border-white"></span>}
+
                 </button>
                 {showNotifications && <NotificationBoard onClose={() => setShowNotifications(false)} />}
               </div>
-              <button className="w-12 h-12 rounded-2xl bg-gray-50 flex items-center justify-center text-gray-400 hover:bg-brand-primary/10 hover:text-brand-primary transition-all">
+              <button disabled title="Chưa có hộp thư" className="w-12 h-12 rounded-2xl bg-gray-50 flex items-center justify-center text-gray-400 hover:bg-brand-primary/10 hover:text-brand-primary transition-all">
                 <MessageSquare size={22} />
               </button>
             </div>
-            
+
             <div className="h-10 w-[1px] bg-gray-100"></div>
 
             <div className="flex items-center gap-4">
@@ -3755,8 +3638,8 @@ const ManagementLayout = ({
   );
 };
 
-const SuperAdminView = ({ 
-  setCurrentView, 
+const SuperAdminView = ({
+  setCurrentView,
   admins,
   schools,
   teachers,
@@ -3767,7 +3650,7 @@ const SuperAdminView = ({
   userData,
   onLogout,
   setFilterSchoolId
-}: { 
+}: {
   setCurrentView: (view: View) => void,
   admins: any[],
   schools: any[],
@@ -3791,9 +3674,9 @@ const SuperAdminView = ({
   }, [students]);
 
   return (
-    <ManagementLayout 
-      userData={userData} 
-      currentView="superadmin" 
+    <ManagementLayout
+      userData={userData}
+      currentView="superadmin"
       setCurrentView={setCurrentView}
       onLogout={onLogout}
       setFilterSchoolId={setFilterSchoolId}
@@ -3805,13 +3688,13 @@ const SuperAdminView = ({
             <p className="text-gray-500 font-medium">Quản lý cơ sở của bạn một cách dễ dàng. Theo dõi mọi thứ ở một nơi.</p>
           </div>
           <div className="flex items-center gap-4">
-            <button 
+            <button
               onClick={() => setCurrentView('admin-list')}
               className="px-6 py-3 bg-white text-brand-primary border-2 border-brand-primary/10 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-50 transition-all flex items-center gap-2"
             >
               <User size={16} /> QUẢN LÝ ADMIN
             </button>
-            <button className="px-8 py-4 bg-brand-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:shadow-xl transition-all shadow-lg shadow-brand-primary/20">
+            <button disabled title="Dùng khu vực Báo cáo hoặc CSV khảo sát; nút này chưa có backend" className="px-8 py-4 bg-brand-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:shadow-xl transition-all shadow-lg shadow-brand-primary/20">
               TẠO BÁO CÁO
             </button>
           </div>
@@ -3825,8 +3708,8 @@ const SuperAdminView = ({
             { label: 'Trường học', value: schools.length, icon: <School />, color: "bg-brand-secondary/10", textColor: "text-brand-secondary", view: 'school-list' },
             { label: 'Admins', value: admins.length, icon: <User />, color: "bg-red-50", textColor: "text-red-500", view: 'admin-list' },
           ].map((stat, i) => (
-            <div 
-              key={i} 
+            <div
+              key={i}
               onClick={() => setCurrentView(stat.view as View)}
               className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm flex items-center gap-6 group hover:shadow-xl transition-all cursor-pointer"
             >
@@ -3868,8 +3751,8 @@ const SuperAdminView = ({
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
                     <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 10, fontWeight: 700 }} />
                     <YAxis axisLine={false} tickLine={false} tick={{ fill: '#9ca3af', fontSize: 10, fontWeight: 700 }} />
-                    <Tooltip 
-                      contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                    <Tooltip
+                      contentStyle={{backgroundColor:'var(--ui-surface)',color:'var(--ui-text)', borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
                     />
                     <Bar dataKey="students" fill="#18A5A7" radius={[5, 5, 0, 0]} />
                     <Bar dataKey="teachers" fill="#F59E0B" radius={[5, 5, 0, 0]} />
@@ -3888,7 +3771,7 @@ const SuperAdminView = ({
             <div className="bg-white p-10 rounded-[3.5rem] border border-gray-100 shadow-sm">
               <h3 className="text-xl font-display font-black text-brand-primary mb-8">Calendar</h3>
               <div className="aspect-square bg-gray-50 rounded-3xl flex items-center justify-center text-gray-400 font-medium italic">
-                [ Calendar Placeholder ]
+                Lịch chưa khả dụng · chưa có dịch vụ lịch
               </div>
             </div>
 
@@ -3896,8 +3779,8 @@ const SuperAdminView = ({
               <h3 className="text-xl font-display font-black text-brand-primary mb-8">Recent Admins</h3>
               <div className="space-y-4">
                 {admins.map((admin) => (
-                  <div 
-                    key={admin.id} 
+                  <div
+                    key={admin.id}
                     onClick={() => onViewAdmin(admin)}
                     className="p-4 rounded-2xl bg-gray-50 flex items-center justify-between group hover:bg-white hover:shadow-xl transition-all border border-transparent hover:border-gray-100 cursor-pointer"
                   >
@@ -3922,17 +3805,17 @@ const SuperAdminView = ({
   );
 };
 
-const TeacherClassView = ({ 
-  userData, 
-  setCurrentView, 
-  onLogout, 
+const TeacherClassView = ({
+  userData,
+  setCurrentView,
+  onLogout,
   setFilterSchoolId,
   classes,
   students,
   teachers,
   testResults
-}: { 
-  userData: any, 
+}: {
+  userData: any,
   setCurrentView: (view: View) => void,
   onLogout: () => void,
   setFilterSchoolId: (id: string | null) => void,
@@ -3973,26 +3856,26 @@ const TeacherClassView = ({
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={STRESS_HISTORY_DATA}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F3F4F6" />
-                  <XAxis 
-                    dataKey="month" 
-                    axisLine={false} 
-                    tickLine={false} 
-                    tick={{ fill: '#9CA3AF', fontSize: 12, fontWeight: 700 }} 
+                  <XAxis
+                    dataKey="month"
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fill: '#9CA3AF', fontSize: 12, fontWeight: 700 }}
                     dy={10}
                   />
-                  <YAxis 
-                    axisLine={false} 
-                    tickLine={false} 
-                    tick={{ fill: '#9CA3AF', fontSize: 12, fontWeight: 700 }} 
+                  <YAxis
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fill: '#9CA3AF', fontSize: 12, fontWeight: 700 }}
                   />
-                  <Tooltip 
+                  <Tooltip
                     cursor={{ fill: '#F9FAFB' }}
-                    contentStyle={{ borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                    contentStyle={{backgroundColor:'var(--ui-surface)',color:'var(--ui-text)', borderRadius: '1rem', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
                   />
-                  <Bar 
-                    dataKey="avg" 
-                    fill="#4F46E5" 
-                    radius={[8, 8, 0, 0]} 
+                  <Bar
+                    dataKey="avg"
+                    fill="#4F46E5"
+                    radius={[8, 8, 0, 0]}
                     barSize={40}
                   />
                 </BarChart>
@@ -4051,7 +3934,7 @@ const TeacherClassView = ({
               {classStudents.length} HỌC SINH
             </div>
           </div>
-          
+
           <div className="overflow-x-auto -mx-8 md:-mx-12">
             <table className="w-full text-left border-collapse">
               <thead>
@@ -4065,7 +3948,7 @@ const TeacherClassView = ({
                 {classStudents.map((student) => (
                   <tr key={student.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/30 transition-colors group">
                     <td className="px-8 py-6">
-                      <div 
+                      <div
                         className="flex items-center gap-4 cursor-pointer group/name"
                         onClick={() => setSelectedStudent(student)}
                       >
@@ -4084,14 +3967,14 @@ const TeacherClassView = ({
                     <td className="px-8 py-6">
                       <div className={cn(
                         "inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest",
-                        student.points > 60 ? "bg-red-50 text-red-500" : 
-                        student.points > 40 ? "bg-brand-orange/10 text-brand-orange" : 
+                        student.points > 60 ? "bg-red-50 text-red-500" :
+                        student.points > 40 ? "bg-brand-orange/10 text-brand-orange" :
                         "bg-brand-primary/10 text-brand-primary"
                       )}>
                         <div className={cn(
                           "w-1.5 h-1.5 rounded-full",
-                          student.points > 60 ? "bg-red-500" : 
-                          student.points > 40 ? "bg-brand-orange" : 
+                          student.points > 60 ? "bg-red-500" :
+                          student.points > 40 ? "bg-brand-orange" :
                           "bg-brand-primary"
                         )} />
                         {student.points > 60 ? "Cao" : student.points > 40 ? "Trung bình" : "Thấp"}
@@ -4116,14 +3999,14 @@ const TeacherClassView = ({
       <AnimatePresence>
         {selectedStudent && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setSelectedStudent(null)}
               className="absolute inset-0 bg-brand-primary/20 backdrop-blur-sm"
             />
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
@@ -4134,14 +4017,14 @@ const TeacherClassView = ({
                   <div className="w-20 h-20 rounded-3xl bg-brand-orange/10 flex items-center justify-center text-brand-orange text-3xl font-black">
                     {selectedStudent.username.charAt(0).toUpperCase()}
                   </div>
-                  <button 
+                  <button
                     onClick={() => setSelectedStudent(null)}
                     className="p-2 text-gray-300 hover:text-gray-500 transition-colors"
                   >
                     <X size={24} />
                   </button>
                 </div>
-                
+
                 <h3 className="text-2xl font-display font-black text-brand-primary mb-1">@{selectedStudent.username}</h3>
                 <p className="text-xs font-black text-gray-400 uppercase tracking-widest mb-8">Học sinh lớp {selectedStudent.className}</p>
 
@@ -4178,7 +4061,7 @@ const TeacherClassView = ({
                 </div>
 
                 <div className="flex gap-4 mt-10">
-                  <button 
+                  <button
                     onClick={() => setSelectedStudent(null)}
                     className="flex-1 py-4 bg-brand-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-brand-primary/20 hover:scale-[1.02] transition-all"
                   >
@@ -4194,8 +4077,8 @@ const TeacherClassView = ({
   );
 };
 
-const TeacherListView = ({ 
-  teachers, 
+const TeacherListView = ({
+  teachers,
   pendingTeachers,
   initialTypeFilter,
   onBack,
@@ -4204,8 +4087,8 @@ const TeacherListView = ({
   setCurrentView,
   onLogout,
   setFilterSchoolId
-}: { 
-  teachers: any[], 
+}: {
+  teachers: any[],
   pendingTeachers: any[],
   initialTypeFilter?: 'all' | 'homeroom' | 'subject' | 'pending',
   onBack: () => void,
@@ -4294,7 +4177,7 @@ const TeacherListView = ({
   }, [searchQuery, schoolFilter, teacherTypeFilter, allTeachers]);
 
   return (
-    <ManagementLayout 
+    <ManagementLayout
       userData={userData}
       currentView="teacher-list"
       setCurrentView={setCurrentView}
@@ -4304,7 +4187,7 @@ const TeacherListView = ({
       <div className="p-12">
         <div className="flex items-center justify-between mb-12">
           <div className="flex items-center gap-6">
-            <button 
+            <button
               onClick={onBack}
               className="w-12 h-12 rounded-full bg-gray-50 flex items-center justify-center text-gray-400 hover:bg-brand-primary/10 hover:text-brand-primary transition-all"
             >
@@ -4334,7 +4217,7 @@ const TeacherListView = ({
         <div className="bg-white p-10 rounded-[3.5rem] border border-gray-100 shadow-sm relative z-40">
           <div className="flex items-center mb-8 bg-gray-50 p-2 rounded-3xl">
             <Search className="text-gray-400 ml-4 mr-2" size={20} />
-            <input 
+            <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -4381,7 +4264,7 @@ const TeacherListView = ({
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {filteredTeachers.map((teacher) => (
-              <div 
+              <div
                 key={teacher.id}
                 onClick={() => onViewTeacher(teacher)}
                 className="flex items-center gap-6 p-6 rounded-3xl hover:bg-gray-50 transition-all cursor-pointer border border-gray-100 shadow-sm hover:shadow-xl hover:border-brand-primary/20 group"
@@ -4428,10 +4311,10 @@ const TeacherListView = ({
   );
 };
 
-const AdminView = ({ 
-  setCurrentView, 
+const AdminView = ({
+  setCurrentView,
   onOpenPendingTeachers,
-  pendingTeachers, 
+  pendingTeachers,
   onApprove,
   onDeleteTeacher,
   onViewClass,
@@ -4445,7 +4328,7 @@ const AdminView = ({
   setFilterSchoolId,
   onDeleteStudent,
   onChangePassword
-}: { 
+}: {
   setCurrentView: (view: View) => void,
   onOpenPendingTeachers: () => void,
   pendingTeachers: any[],
@@ -4468,7 +4351,7 @@ const AdminView = ({
   const searchResults = useMemo(() => {
     if (!searchQuery.trim()) return [];
     const query = searchQuery.toLowerCase();
-    
+
     const matchedClasses = classes.filter(c => c.name.toLowerCase().includes(query)).map(c => ({
       type: 'class' as const,
       data: c,
@@ -4487,9 +4370,9 @@ const AdminView = ({
   }, [searchQuery, classes, teachers]);
 
   return (
-    <ManagementLayout 
-      userData={userData} 
-      currentView="admin" 
+    <ManagementLayout
+      userData={userData}
+      currentView="admin"
       setCurrentView={setCurrentView}
       onLogout={onLogout}
       setFilterSchoolId={setFilterSchoolId}
@@ -4501,13 +4384,13 @@ const AdminView = ({
             <p className="text-gray-500 font-medium">Chào mừng trở lại, Admin. Đây là tình hình trường học của bạn hôm nay.</p>
           </div>
           <div className="flex items-center gap-4">
-            <button 
+            <button
               onClick={() => setCurrentView('test-list')}
               className="px-6 py-3 bg-white text-brand-primary border-2 border-brand-primary/10 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-gray-50 transition-all flex items-center gap-2"
             >
               <Zap size={16} /> QUẢN LÝ BÀI TEST
             </button>
-            <button className="px-6 py-3 bg-brand-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:shadow-xl transition-all shadow-lg shadow-brand-primary/20">
+            <button disabled title="Chưa có export cho dashboard này; CSV nằm trong Đợt khảo sát" className="px-6 py-3 bg-brand-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:shadow-xl transition-all shadow-lg shadow-brand-primary/20">
               XUẤT BÁO CÁO
             </button>
           </div>
@@ -4517,18 +4400,18 @@ const AdminView = ({
         <div className="mb-12 relative z-40">
           <div className="relative">
             <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-gray-400" size={24} />
-            <input 
-              type="text" 
+            <input
+              type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Tìm kiếm tên lớp, tên giáo viên..." 
+              placeholder="Tìm kiếm tên lớp, tên giáo viên..."
               className="w-full pl-16 pr-6 py-5 rounded-[2rem] bg-white border border-gray-100 shadow-sm focus:ring-4 focus:ring-brand-primary/10 outline-none text-lg font-medium transition-all"
             />
           </div>
-          
+
           <AnimatePresence>
             {searchQuery.trim() && (
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 10 }}
@@ -4537,7 +4420,7 @@ const AdminView = ({
                 {searchResults.length > 0 ? (
                   <div className="p-4 space-y-2">
                     {searchResults.map((result, idx) => (
-                      <div 
+                      <div
                         key={idx}
                         onClick={() => {
                           if (result.type === 'class') {
@@ -4574,7 +4457,7 @@ const AdminView = ({
 
         {/* Pending Approvals Notification */}
         {pendingTeachers.length > 0 && (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             className="mb-12 p-8 bg-brand-orange/10 border border-brand-orange/20 rounded-[3rem] flex flex-col md:flex-row items-center justify-between gap-8 shadow-lg shadow-brand-orange/5"
@@ -4588,7 +4471,7 @@ const AdminView = ({
                 <p className="text-gray-500 font-medium">Có <span className="text-brand-orange font-black">{pendingTeachers.length}</span> giáo viên đang chờ phê duyệt tài khoản.</p>
               </div>
             </div>
-            <button 
+            <button
               onClick={onOpenPendingTeachers}
               className="px-8 py-4 bg-brand-orange text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:shadow-xl transition-all"
             >
@@ -4604,8 +4487,8 @@ const AdminView = ({
             { label: 'Tổng số Giáo viên', value: teachers.length, icon: <Users className="text-brand-orange" />, color: "bg-brand-orange/10", view: 'teacher-list' },
             { label: 'Tổng số Học sinh', value: students.length, icon: <GraduationCap className="text-brand-secondary" />, color: "bg-brand-secondary/10", view: 'class-list' },
           ].map((stat, i) => (
-            <div 
-              key={i} 
+            <div
+              key={i}
               onClick={() => setCurrentView(stat.view as View)}
               className="bg-white p-8 rounded-[2.5rem] border border-gray-100 shadow-sm flex items-center gap-6 group hover:shadow-xl transition-all cursor-pointer"
             >
@@ -4627,56 +4510,20 @@ const AdminView = ({
               <div className="flex items-center justify-between mb-12">
                 <div>
                   <h3 className="text-2xl font-display font-black text-brand-primary mb-2">Mức độ Stress trung bình theo Lớp</h3>
-                  <p className="text-gray-400 text-sm font-medium">Dữ liệu thời gian thực từ các bài kiểm tra gần đây</p>
+                  <p className="text-gray-400 text-sm font-medium">Chỉ hiển thị khi có dữ liệu và diễn giải tương ứng đã được duyệt</p>
                 </div>
                 <div className="flex items-center gap-2 px-4 py-2 bg-brand-primary/5 text-brand-primary rounded-full text-[10px] font-black uppercase tracking-widest">
-                  <Zap size={14} /> DỮ LIỆU THỜI GIAN THỰC
+                  <Zap size={14} /> CHƯA DUYỆT DIỄN GIẢI
                 </div>
               </div>
-              <div className="h-[400px] w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={classes} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f3f4f6" />
-                    <XAxis 
-                      dataKey="name" 
-                      axisLine={false} 
-                      tickLine={false} 
-                      tick={{ fill: '#9ca3af', fontSize: 12, fontWeight: 700 }}
-                      dy={15}
-                    />
-                    <YAxis 
-                      axisLine={false} 
-                      tickLine={false} 
-                      tick={{ fill: '#9ca3af', fontSize: 12, fontWeight: 700 }}
-                      dx={-15}
-                    />
-                    <Tooltip 
-                      cursor={{ fill: '#f9fafb' }}
-                      contentStyle={{ 
-                        borderRadius: '2rem', 
-                        border: 'none', 
-                        boxShadow: '0 25px 50px -12px rgb(0 0 0 / 0.15)',
-                        padding: '1.5rem'
-                      }}
-                    />
-                    <Bar dataKey="avgStress" radius={[15, 15, 0, 0]} barSize={60}>
-                      {classes.map((entry, index) => (
-                        <Cell 
-                          key={`cell-${index}`} 
-                          fill={entry.avgStress > 60 ? '#EF4444' : entry.avgStress > 40 ? '#F59E0B' : '#18A5A7'} 
-                        />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+              <div className="h-[220px] w-full"><p className="unavailable-note">Chưa có chỉ số STRESS TB được duyệt. Không suy diễn từ điểm khác thang hoặc coi dữ liệu thiếu là 0.</p></div>
             </div>
 
             {/* Recent Results */}
             <div className="bg-white p-12 rounded-[3.5rem] border border-gray-100 shadow-sm">
               <div className="flex items-center justify-between mb-10">
                 <h3 className="text-2xl font-display font-black text-brand-primary">Kết quả kiểm tra gần đây</h3>
-                <button 
+                <button
                   onClick={() => setCurrentView('class-list')}
                   className="px-6 py-2 bg-brand-primary/5 text-brand-primary rounded-full text-[10px] font-black uppercase tracking-widest hover:bg-brand-primary hover:text-white transition-all"
                 >
@@ -4701,7 +4548,7 @@ const AdminView = ({
                     <div className="flex items-center gap-3">
                       {userData.role === 'Quản trị viên cấp cao' && (
                         <>
-                          <button disabled data-unavailable="true" 
+                          <button disabled data-unavailable="true"
                             onClick={(e) => {
                               e.stopPropagation();
                               onChangePassword?.(result.id, result.username);
@@ -4711,7 +4558,7 @@ const AdminView = ({
                           >
                             <Lock size={16} />
                           </button>
-                          <button disabled data-unavailable="true" 
+                          <button disabled data-unavailable="true"
                             onClick={(e) => {
                               e.stopPropagation();
                               onDeleteStudent?.(result.id);
@@ -4739,7 +4586,7 @@ const AdminView = ({
             <div className="bg-white p-10 rounded-[3.5rem] border border-gray-100 shadow-sm">
               <div className="flex items-center justify-between mb-8">
                 <h3 className="text-xl font-display font-black text-brand-primary">Giáo viên</h3>
-                <button 
+                <button
                   onClick={() => setCurrentView('teacher-list')}
                   className="text-[10px] font-black text-brand-primary uppercase tracking-widest hover:underline"
                 >
@@ -4748,8 +4595,8 @@ const AdminView = ({
               </div>
               <div className="space-y-4">
                 {teachers.slice(0, 4).map((teacher) => (
-                  <div 
-                    key={teacher.id} 
+                  <div
+                    key={teacher.id}
                     onClick={() => onViewTeacher(teacher)}
                     className="flex items-center gap-4 p-4 rounded-2xl hover:bg-gray-50 transition-all cursor-pointer group"
                   >
@@ -4796,13 +4643,13 @@ const SettingsView = ({
   };
 
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       className="max-w-3xl mx-auto px-4 py-12"
     >
       <div className="flex items-center gap-4 mb-12">
-        <button 
+        <button
           onClick={onBack}
           className="w-12 h-12 rounded-full bg-white border border-gray-100 flex items-center justify-center text-gray-400 hover:bg-brand-primary/10 hover:text-brand-primary hover:border-transparent transition-all shadow-sm"
         >
@@ -4820,7 +4667,7 @@ const SettingsView = ({
             <Settings size={24} className="text-brand-primary" />
             Tùy chỉnh giao diện
           </h3>
-          
+
           <div className="space-y-6">
             <div className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl">
               <div>
@@ -4828,8 +4675,8 @@ const SettingsView = ({
                 <p className="text-sm text-gray-500">Sáng / Tối</p>
               </div>
               <div className="flex bg-white rounded-xl p-1 shadow-sm border border-gray-100">
-                <button 
-                  onClick={() => setTheme('light')}
+                <button
+                  disabled title="Chưa hỗ trợ theme khác" onClick={() => setTheme('light')}
                   className={cn(
                     "px-4 py-2 rounded-lg text-sm font-bold transition-all",
                     theme === 'light' ? "bg-brand-primary text-white shadow-md" : "text-gray-500 hover:bg-gray-50"
@@ -4837,8 +4684,8 @@ const SettingsView = ({
                 >
                   Sáng
                 </button>
-                <button 
-                  onClick={() => setTheme('dark')}
+                <button
+                  disabled title="Chưa hỗ trợ theme khác" onClick={() => setTheme('dark')}
                   className={cn(
                     "px-4 py-2 rounded-lg text-sm font-bold transition-all",
                     theme === 'dark' ? "bg-gray-800 text-white shadow-md" : "text-gray-500 hover:bg-gray-50"
@@ -4855,8 +4702,8 @@ const SettingsView = ({
                 <p className="text-sm text-gray-500">Tiếng Việt / English</p>
               </div>
               <div className="flex bg-white rounded-xl p-1 shadow-sm border border-gray-100">
-                <button 
-                  onClick={() => setLanguage('vi')}
+                <button
+                  disabled title="Chưa hỗ trợ dịch giao diện" onClick={() => setLanguage('vi')}
                   className={cn(
                     "px-4 py-2 rounded-lg text-sm font-bold transition-all",
                     language === 'vi' ? "bg-brand-primary text-white shadow-md" : "text-gray-500 hover:bg-gray-50"
@@ -4864,8 +4711,8 @@ const SettingsView = ({
                 >
                   Tiếng Việt
                 </button>
-                <button 
-                  onClick={() => setLanguage('en')}
+                <button
+                  disabled title="Chưa hỗ trợ dịch giao diện" onClick={() => setLanguage('en')}
                   className={cn(
                     "px-4 py-2 rounded-lg text-sm font-bold transition-all",
                     language === 'en' ? "bg-brand-primary text-white shadow-md" : "text-gray-500 hover:bg-gray-50"
@@ -4883,7 +4730,7 @@ const SettingsView = ({
             <Lock size={24} className="text-brand-primary" />
             Bảo mật
           </h3>
-          
+
           <div className="space-y-4">
             {!showPasswordChange ? (
               <div className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl">
@@ -4891,8 +4738,8 @@ const SettingsView = ({
                   <p className="font-bold text-gray-700">Mật khẩu</p>
                   <p className="text-sm text-gray-500">Thay đổi mật khẩu đăng nhập của bạn</p>
                 </div>
-                <button 
-                  onClick={() => setShowPasswordChange(true)}
+                <button
+                  disabled title="Đổi mật khẩu chưa có backend" onClick={() => setShowPasswordChange(true)}
                   className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-bold text-gray-700 hover:bg-gray-50 transition-all shadow-sm"
                 >
                   Thay đổi
@@ -4902,8 +4749,8 @@ const SettingsView = ({
               <form onSubmit={handlePasswordChange} className="p-6 bg-gray-50 rounded-2xl space-y-4">
                 <div>
                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2 mb-2">Mật khẩu hiện tại</label>
-                  <input 
-                    type="password" 
+                  <input
+                    type="password"
                     required
                     value={passwords.current}
                     onChange={e => setPasswords({...passwords, current: e.target.value})}
@@ -4912,8 +4759,8 @@ const SettingsView = ({
                 </div>
                 <div>
                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2 mb-2">Mật khẩu mới</label>
-                  <input 
-                    type="password" 
+                  <input
+                    type="password"
                     required
                     value={passwords.new}
                     onChange={e => setPasswords({...passwords, new: e.target.value})}
@@ -4922,8 +4769,8 @@ const SettingsView = ({
                 </div>
                 <div>
                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] block ml-2 mb-2">Xác nhận mật khẩu mới</label>
-                  <input 
-                    type="password" 
+                  <input
+                    type="password"
                     required
                     value={passwords.confirm}
                     onChange={e => setPasswords({...passwords, confirm: e.target.value})}
@@ -4931,7 +4778,7 @@ const SettingsView = ({
                   />
                 </div>
                 <div className="flex gap-3 pt-2">
-                  <button disabled data-unavailable="true" 
+                  <button
                     type="button"
                     onClick={() => {
                       setShowPasswordChange(false);
@@ -4941,7 +4788,7 @@ const SettingsView = ({
                   >
                     Hủy
                   </button>
-                  <button disabled data-unavailable="true" 
+                  <button disabled data-unavailable="true"
                     type="submit"
                     className="flex-1 py-3 bg-brand-primary text-white rounded-xl font-bold text-sm hover:shadow-lg hover:shadow-brand-primary/20 transition-all"
                   >
@@ -4958,14 +4805,14 @@ const SettingsView = ({
             <AlertCircle size={24} />
             Khu vực nguy hiểm
           </h3>
-          
+
           <div className="space-y-4">
             <div className="flex items-center justify-between p-4 bg-red-50/50 rounded-2xl border border-red-100/50">
               <div>
                 <p className="font-bold text-gray-800">Xóa tài khoản</p>
                 <p className="text-sm text-gray-500">Xóa vĩnh viễn tài khoản và mọi dữ liệu liên quan.</p>
               </div>
-              <button disabled data-unavailable="true" 
+              <button disabled data-unavailable="true"
                 onClick={onDeleteAccount}
                 className="px-6 py-3 bg-red-500 text-white rounded-xl font-bold text-sm hover:bg-red-600 shadow-lg shadow-red-500/20 transition-all"
               >
@@ -4979,8 +4826,10 @@ const SettingsView = ({
   );
 };
 
-export default function LegacyApp({initialView='test-list',demoAccount,initialData,embedded=true}:{initialView?:View;demoAccount?:AuthAccount;initialData?:{students:any[];teachers:any[];classes:any[];admins:any[];schools:any[];tests?:any[]};embedded?:boolean}) {
-  const [currentView, setCurrentView] = useState<View>(initialView);
+export default function LegacyApp({initialView='test-list',demoAccount,initialData,embedded=true,onNavigateView,onLogout:outerLogout}:{onNavigateView?:(view:View)=>void;onLogout?:()=>void;initialView?:View;demoAccount?:AuthAccount;initialData?:{students:any[];teachers:any[];classes:any[];admins:any[];schools:any[];tests?:any[]};embedded?:boolean}) {useLocale();
+  const editorRequest=useRef(0);
+  const [currentView, setViewState] = useState<View>(initialView);
+  const setCurrentView=(view:View)=>{editorRequest.current++;setViewState(view);onNavigateView?.(view);};
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [activeSectionId, setActiveSectionId] = useState<string>(HANDBOOK_DATA[0].id);
   const [searchQuery, setSearchQuery] = useState('');
@@ -5036,8 +4885,8 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
   const [teachers, setTeachers] = useState<any[]>(initialData?.teachers ?? []);
   const [admins, setAdmins] = useState<any[]>(initialData?.admins ?? []);
   const [schools, setSchools] = useState<any[]>(initialData?.schools ?? []);
-  const [classes, setClasses] = useState<any[]>(initialData?.classes ?? []);
-  const [students, setStudents] = useState<any[]>(initialData?.students ?? []);
+  const [classes, setClasses] = useState<any[]>((initialData?.classes??[]).map(c=>({...c,avgStress:null})));
+  const [students, setStudents] = useState<any[]>((initialData?.students??[]).map(s=>({...s,points:null,stressLevel:null})));
   const [testResults, setTestResults] = useState<TestResult[]>([]);
   const [activeTest, setActiveTest] = useState<any>(null);
   const [selectedClassForView, setSelectedClassForView] = useState<any>(null);
@@ -5061,7 +4910,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
       return;
     }
     if (window.confirm('Bạn có chắc chắn muốn xóa bài test này?')) {
-      const result = await testService.deleteTemplate(id);
+      const result = await testService.deleteTemplate(id,Number(testToDelete?.currentVersion??0));
       if (!result.ok) {
         const message = 'error' in result ? result.error.message : 'Không xóa được bài test.';
         alert(message);
@@ -5075,7 +4924,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
     const item = tests.find((test) => String(test.id) === id);
     if (!item) return;
 
-    const result = await testService.publishTemplate(id, !item.isOpen);
+    const result = await testService.publishTemplate(id, !item.isOpen,Number(item.currentVersion??0));
     if (!result.ok) {
       const message = 'error' in result ? result.error.message : 'Không cập nhật được trạng thái bài test.';
       alert(message);
@@ -5090,30 +4939,11 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
     )));
   };
 
-  const handleEditTest = (test: any) => {
-    if (test) {
-      if (test.isPredefined && userData.role !== 'Quản trị viên cấp cao') {
-        alert('Bạn không có quyền chỉnh sửa bài test mặc định của hệ thống.');
-        return;
-      }
-      setActiveTest(test);
-    } else {
-      setActiveTest({
-        id: `tmp-${Date.now()}`,
-        title: 'Bài test mới',
-        desc: 'Mô tả bài test',
-        time: '15 phút',
-        questions: '0 câu',
-        icon: 'Zap',
-        color: 'bg-brand-primary',
-        isOpen: true,
-        isPredefined: false,
-        isNewTemplate: true,
-        targetAudience: 'Cả hai',
-        questionList: []
-      });
-    }
-    setCurrentView('test-editor');
+  const handleEditTest = async (test:any)=>{
+    const generation=++editorRequest.current;
+    if(!test){setActiveTest({id:`tmp-${Date.now()}`,title:'Bài test mới',desc:'Mô tả bài test',time:'Không giới hạn',questions:'0 câu',icon:'Zap',color:'bg-brand-primary',isOpen:false,isPredefined:false,isNewTemplate:true,targetAudience:'Cả hai',questionList:[],bankLoaded:true,demoOnly:!!demoAccount});setCurrentView('test-editor');return;}
+    if(demoAccount){setActiveTest({...test,bankLoaded:true,demoOnly:true});setCurrentView('test-editor');return;}
+    try{const detail=await testService.getManageDetail(String(test.id));if(generation!==editorRequest.current)return;setActiveTest(normalizeTestFromApiTemplate(detail.template,{...test,questionList:mapApiQuestionListToUi(detail.questionList),definitionDigest:detail.definitionDigest,bankLoaded:true}));setCurrentView('test-editor');}catch(e){if(generation===editorRequest.current)alert((e as Error).message);}
   };
 
   const openTestTakingView = async (test: any) => {
@@ -5134,7 +4964,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
       detailResult.data.template,
       {
         ...test,
-        questionList: mapApiQuestionListToUi(detailResult.data.questionList),
+        questionList: mapApiQuestionListToUi(detailResult.data.questionList),definitionDigest:detailResult.data.definitionDigest,
       },
     );
 
@@ -5193,7 +5023,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
   const mapAccountToStudentRow = (account: AuthAccount) => {
     const school = account.profile.school || '';
     const className = account.profile.className || '';
-    const score = 0;
+    const score = null;
 
     return {
       id: account.id,
@@ -5277,8 +5107,8 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
       if (!current) return;
 
       current.studentCount += 1;
-      const score = Number(student.points || student.stressLevel || 0);
-      if (Number.isFinite(score)) {
+      const score = student.interpretationApproved===true?student.points:null;
+      if (typeof score==='number'&&Number.isFinite(score)) {
         current.scoreTotal += score;
         current.scoreCount += 1;
       }
@@ -5288,7 +5118,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
       id: item.id,
       name: item.name,
       studentCount: item.studentCount,
-      avgStress: item.scoreCount > 0 ? Math.round(item.scoreTotal / item.scoreCount) : 0,
+      avgStress: item.scoreCount > 0 ? Math.round(item.scoreTotal / item.scoreCount) : null,
       teacherName: item.teacherName || 'Chưa gán',
       schoolId: item.schoolId,
     }));
@@ -5637,7 +5467,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
       resetChatStateForOwner(getChatOwnerIdFromAccount(sessionAccount));
       setIsLoggedIn(true);
       setUserData(buildUserDataFromAccount(sessionAccount));
-      setCurrentView(initialView);
+      setViewState(initialView);
     };
 
     void syncSession();
@@ -5878,7 +5708,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
 
 
   const filteredSections = useMemo(() => {
-    return HANDBOOK_DATA.filter(section => 
+    return HANDBOOK_DATA.filter(section =>
       section.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       section.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
       section.content.toLowerCase().includes(searchQuery.toLowerCase())
@@ -6003,7 +5833,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
       {!isManagementView && !embedded && (
         <header className="bg-white py-6 px-4 border-b border-gray-100">
           <div className="max-w-7xl mx-auto flex items-center justify-between gap-6">
-            <button 
+            <button
               onClick={() => {
                 if (isLoggedIn && userData.role === 'Admin') {
                   setCurrentView('admin');
@@ -6015,7 +5845,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
               }}
               className="flex items-center gap-3 hover:opacity-80 transition-opacity text-left"
             >
-              <img src="/logo.png" alt="Trạm An Logo" className="h-28 w-auto object-contain" onError={(e) => {
+              <img src="/logo.png" alt={ui("Trạm An Logo")} className="h-28 w-auto object-contain" onError={(e) => {
                 // Fallback if logo.png is not uploaded yet
                 e.currentTarget.style.display = 'none';
                 e.currentTarget.nextElementSibling!.classList.remove('hidden');
@@ -6025,28 +5855,28 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                   <BookOpen size={32} />
                 </div>
                 <div className="flex flex-col justify-center">
-                  <h1 className="text-3xl font-black text-brand-primary tracking-tight leading-none">TRẠM AN</h1>
-                  <p className="text-[10px] font-bold text-brand-secondary uppercase tracking-[0.2em] mt-2">Lặng để lắng</p>
+                  <h1 className="text-3xl font-black text-brand-primary tracking-tight leading-none">{ui("TRẠM AN")}</h1>
+                  <p className="text-[10px] font-bold text-brand-secondary uppercase tracking-[0.2em] mt-2">{ui("Lặng để lắng")}</p>
                 </div>
               </div>
             </button>
 
             <div className="flex items-center gap-4">
               {isLoggedIn ? (
-                <div 
+                <div
                   className="relative"
                   onMouseEnter={() => setIsUserMenuOpen(true)}
                   onMouseLeave={() => setIsUserMenuOpen(false)}
                 >
-                  <button 
+                  <button
                     onClick={() => setCurrentView('account')}
                     className="flex items-center gap-3 p-1 pr-4 bg-gray-50 rounded-full border border-gray-100 hover:bg-brand-primary/5 transition-all"
                   >
                     <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-white shadow-sm">
-                      <img src={userData.avatar} alt="User" className="w-full h-full object-cover" />
+                      <img src={userData.avatar} alt={ui("User")} className="w-full h-full object-cover" />
                     </div>
                     <div className="text-left hidden sm:block">
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest leading-none mb-1">XIN CHÀO</p>
+                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest leading-none mb-1">{ui("XIN CHÀO")}</p>
                       <p className="text-xs font-bold text-brand-primary">{userData.name}</p>
                     </div>
                   </button>
@@ -6061,11 +5891,11 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                         className="absolute right-0 top-full mt-3 w-56 bg-white rounded-[2rem] shadow-2xl border border-gray-50 overflow-hidden z-[100]"
                       >
                         <div className="p-4 border-b border-gray-50 bg-gray-50/50">
-                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">TÀI KHOẢN</p>
+                          <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">{ui("TÀI KHOẢN")}</p>
                           <p className="text-xs font-bold text-brand-primary truncate">{userData.email || userData.username}</p>
                         </div>
                         <div className="p-2">
-                          <button 
+                          <button
                             onClick={() => {
                               setCurrentView('account');
                               setIsUserMenuOpen(false);
@@ -6073,9 +5903,9 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-brand-primary/5 text-gray-600 hover:text-brand-primary transition-all text-left"
                           >
                             <User size={16} />
-                            <span className="text-xs font-bold">Tài khoản</span>
+                            <span className="text-xs font-bold">{ui("Tài khoản")}</span>
                           </button>
-                          <button 
+                          <button
                             onClick={() => {
                               setCurrentView('settings');
                               setIsUserMenuOpen(false);
@@ -6083,10 +5913,10 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-brand-primary/5 text-gray-600 hover:text-brand-primary transition-all text-left"
                           >
                             <Settings size={16} />
-                            <span className="text-xs font-bold">Cài đặt</span>
+                            <span className="text-xs font-bold">{ui("Cài đặt")}</span>
                           </button>
                           <div className="h-px bg-gray-50 my-2 mx-2" />
-                          <button 
+                          <button
                             onClick={() => {
                               void handleLogout();
                               setIsUserMenuOpen(false);
@@ -6094,7 +5924,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-red-50 text-gray-600 hover:text-red-500 transition-all text-left"
                           >
                             <LogOut size={16} />
-                            <span className="text-xs font-bold">Đăng xuất</span>
+                            <span className="text-xs font-bold">{ui("Đăng xuất")}</span>
                           </button>
                         </div>
                       </motion.div>
@@ -6102,15 +5932,14 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                   </AnimatePresence>
                 </div>
               ) : (
-                <button 
+                <button
                   onClick={() => {
                     setCurrentView('auth');
                   }}
                   className="flex items-center gap-2 px-6 py-2.5 bg-brand-primary text-white rounded-full text-xs font-black uppercase tracking-widest hover:bg-brand-primary/90 transition-all shadow-lg shadow-brand-primary/20"
                 >
                   <LogIn size={16} />
-                  ĐĂNG NHẬP
-                </button>
+                  {ui("ĐĂNG NHẬP")}</button>
               )}
             </div>
           </div>
@@ -6119,7 +5948,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
 
       {/* Main Navigation */}
       {!isManagementView && !embedded && currentView !== 'auth' && (
-        <nav 
+        <nav
           className="bg-white border-b border-gray-100 sticky top-0 z-40 shadow-sm"
           onMouseLeave={() => setIsHandbookHovered(false)}
         >
@@ -6127,38 +5956,35 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
             {isLoggedIn && (userData.role === 'Admin' || userData.role === 'Quản trị viên cấp cao') ? (
               <div className="flex items-center">
                 {userData.role === 'Quản trị viên cấp cao' && (
-                  <button 
+                  <button
                     onClick={() => setCurrentView('superadmin')}
                     className={cn(
                       "px-8 py-5 text-sm font-bold uppercase tracking-widest transition-all border-b-4",
                       currentView === 'superadmin' ? "border-brand-primary text-brand-primary" : "border-transparent text-gray-400 hover:text-brand-primary"
                     )}
                   >
-                    QUẢN TRỊ CẤP CAO
-                  </button>
+                    {ui("QUẢN TRỊ CẤP CAO")}</button>
                 )}
-                <button 
+                <button
                   onClick={() => setCurrentView('admin')}
                   className={cn(
                     "px-8 py-5 text-sm font-bold uppercase tracking-widest transition-all border-b-4",
                     currentView === 'admin' ? "border-brand-primary text-brand-primary" : "border-transparent text-gray-400 hover:text-brand-primary"
                   )}
                 >
-                  QUẢN LÝ HỆ THỐNG
-                </button>
-                <button 
+                  {ui("QUẢN LÝ HỆ THỐNG")}</button>
+                <button
                   onClick={() => setCurrentView('test-list')}
                   className={cn(
                     "px-8 py-5 text-sm font-bold uppercase tracking-widest transition-all border-b-4",
                     currentView === 'test-list' ? "border-brand-primary text-brand-primary" : "border-transparent text-gray-400 hover:text-brand-primary"
                   )}
                 >
-                  QUẢN LÝ BÀI TEST
-                </button>
+                  {ui("QUẢN LÝ BÀI TEST")}</button>
               </div>
             ) : (
               <>
-                <button 
+                <button
                   onClick={() => setCurrentView('home')}
                   onMouseEnter={() => setIsHandbookHovered(false)}
                   className={cn(
@@ -6166,26 +5992,24 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                     currentView === 'home' ? "border-brand-primary text-brand-primary" : "border-transparent text-gray-400 hover:text-brand-primary"
                   )}
                 >
-                  TRANG CHỦ
-                </button>
-                
-                <div 
+                  {ui("TRANG CHỦ")}</button>
+
+                <div
                   className="relative"
                   onMouseEnter={() => setIsHandbookHovered(true)}
                 >
-                  <button 
+                  <button
                     onClick={() => setCurrentView('handbook')}
                     className={cn(
                       "px-8 py-5 text-sm font-bold uppercase tracking-widest transition-all border-b-4",
                       currentView === 'handbook' ? "border-brand-primary text-brand-primary" : "border-transparent text-gray-400 hover:text-brand-primary"
                     )}
                   >
-                    CẨM NANG
-                  </button>
+                    {ui("CẨM NANG")}</button>
                 </div>
 
                 {isLoggedIn && (
-                  <button 
+                  <button
                     onClick={() => setCurrentView('test-list')}
                     onMouseEnter={() => setIsHandbookHovered(false)}
                     className={cn(
@@ -6193,12 +6017,11 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                       currentView === 'test-list' ? "border-brand-primary text-brand-primary" : "border-transparent text-gray-400 hover:text-brand-primary"
                     )}
                   >
-                    TRẠM GIẢI MÃ
-                  </button>
+                    {ui("TRẠM GIẢI MÃ")}</button>
                 )}
 
                 {isLoggedIn && canAccessTeacherClassView(userData.role, userData.className, userData.teacherType) && (
-                  <button 
+                  <button
                     onClick={() => setCurrentView('teacher-class')}
                     onMouseEnter={() => setIsHandbookHovered(false)}
                     className={cn(
@@ -6206,12 +6029,11 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                       currentView === 'teacher-class' ? "border-brand-primary text-brand-primary" : "border-transparent text-gray-400 hover:text-brand-primary"
                     )}
                   >
-                    LỚP HỌC
-                  </button>
+                    {ui("LỚP HỌC")}</button>
                 )}
 
                 {isLoggedIn && canAccessTeacherClassView(userData.role, userData.className, userData.teacherType) && (
-                  <button 
+                  <button
                     onClick={() => setCurrentView('reports')}
                     onMouseEnter={() => setIsHandbookHovered(false)}
                     className={cn(
@@ -6219,11 +6041,10 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                       currentView === 'reports' ? "border-brand-primary text-brand-primary" : "border-transparent text-gray-400 hover:text-brand-primary"
                     )}
                   >
-                    BÁO CÁO
-                  </button>
+                    {ui("BÁO CÁO")}</button>
                 )}
 
-                <button 
+                <button
                   onClick={() => setCurrentView('contact')}
                   onMouseEnter={() => setIsHandbookHovered(false)}
                   className={cn(
@@ -6231,8 +6052,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                     currentView === 'contact' ? "border-brand-primary text-brand-primary" : "border-transparent text-gray-400 hover:text-brand-primary"
                   )}
                 >
-                  LIÊN HỆ
-                </button>
+                  {ui("LIÊN HỆ")}</button>
               </>
             )}
           </div>
@@ -6275,25 +6095,23 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                       </div>
                     ))}
                   </div>
-                  
+
                   <div className="mt-12 pt-8 border-t border-gray-50 flex items-center justify-between">
                     <div className="flex items-center gap-4">
                       <div className="w-10 h-10 bg-brand-orange/10 text-brand-orange rounded-xl flex items-center justify-center">
                         <Sparkles size={20} />
                       </div>
                       <p className="text-sm text-gray-500 font-medium">
-                        Khám phá hàng chục bài viết chuyên sâu về tâm lý học và kỹ năng sống tại Trạm an.
-                      </p>
+                        {ui("Khám phá hàng chục bài viết chuyên sâu về tâm lý học và kỹ năng sống tại Trạm an.")}</p>
                     </div>
-                    <button 
+                    <button
                       onClick={() => {
                         setCurrentView('handbook');
                         setIsHandbookHovered(false);
                       }}
                       className="px-8 py-3 bg-brand-primary/5 text-brand-primary rounded-xl text-[11px] font-black uppercase tracking-widest hover:bg-brand-primary hover:text-white transition-all"
                     >
-                      XEM TOÀN BỘ CẨM NANG
-                    </button>
+                      {ui("XEM TOÀN BỘ CẨM NANG")}</button>
                   </div>
                 </div>
               </motion.div>
@@ -6306,7 +6124,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
       <main className="flex-1 bg-[#F9FAFB]">
         <AnimatePresence mode="wait">
           {currentView === 'home' && (
-            <motion.div 
+            <motion.div
               key="home"
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -6321,29 +6139,25 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                     animate={{ opacity: 1, scale: 1 }}
                     className="inline-flex items-center gap-2 px-4 py-2 bg-brand-primary/10 text-brand-primary rounded-full text-[10px] font-black uppercase tracking-[0.2em] mb-8"
                   >
-                    <Sparkles size={14} /> CHÀO MỪNG BẠN ĐẾN VỚI TRẠM AN
-                  </motion.div>
+                    <Sparkles size={14} /> {ui("CHÀO MỪNG BẠN ĐẾN VỚI TRẠM AN")}</motion.div>
                   <h2 className="text-6xl md:text-7xl font-serif italic text-brand-primary mb-8 leading-tight">
-                    Nơi tâm hồn tìm thấy <br /> sự bình yên
-                  </h2>
+                    {ui("Nơi tâm hồn tìm thấy")}{' '}<br /> {ui("sự bình yên")}</h2>
                   <p className="text-gray-500 text-xl max-w-2xl mx-auto mb-12 leading-relaxed">
-                    Khám phá những kiến thức tâm lý học chuyên sâu, cẩm nang chăm sóc sức khỏe tinh thần và kết nối với cộng đồng thấu hiểu.
-                  </p>
+                    {ui("Khám phá những kiến thức tâm lý học chuyên sâu, cẩm nang chăm sóc sức khỏe tinh thần và kết nối với cộng đồng thấu hiểu.")}</p>
                   <div className="flex flex-wrap justify-center gap-6">
-                    <button 
+                    <button
                       onClick={() => {
                         setCurrentView('auth');
                       }}
                       className="px-10 py-5 bg-brand-primary text-white rounded-2xl font-black text-sm hover:shadow-2xl hover:shadow-brand-primary/30 transition-all flex items-center gap-3"
                     >
-                      BẮT ĐẦU NGAY <ArrowRight size={20} />
+                      {ui("BẮT ĐẦU NGAY")}{' '}<ArrowRight size={20} />
                     </button>
-                    <button 
+                    <button
                       onClick={() => setCurrentView('handbook')}
                       className="px-10 py-5 bg-white text-brand-primary border-2 border-brand-primary/10 rounded-2xl font-black text-sm hover:bg-gray-50 transition-all"
                     >
-                      XEM CẨM NANG
-                    </button>
+                      {ui("XEM CẨM NANG")}</button>
                   </div>
                 </div>
               )}
@@ -6358,34 +6172,30 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                         animate={{ opacity: 1, x: 0 }}
                         className="inline-flex items-center gap-2 px-4 py-2 bg-brand-primary/10 text-brand-primary rounded-full text-[10px] font-black uppercase tracking-[0.2em] mb-6"
                       >
-                        <Sparkles size={14} /> DÀNH RIÊNG CHO {userData.role.toUpperCase()}
+                        <Sparkles size={14} /> {ui("DÀNH RIÊNG CHO")}{' '}{userData.role.toUpperCase()}
                       </motion.div>
                       <h2 className="text-5xl md:text-6xl font-serif italic text-brand-primary mb-6 leading-tight">
-                        Khám phá bản thân và làm chủ cảm xúc
-                      </h2>
+                        {ui("Khám phá bản thân và làm chủ cảm xúc")}</h2>
                       <p className="text-gray-500 text-lg mb-8 leading-relaxed">
-                        Trạm An là người bạn đồng hành giúp bạn vượt qua những áp lực học đường, thấu hiểu cảm xúc và phát triển bản thân mỗi ngày.
-                      </p>
+                        {ui("Trạm An là người bạn đồng hành giúp bạn vượt qua những áp lực học đường, thấu hiểu cảm xúc và phát triển bản thân mỗi ngày.")}</p>
                       <div className="flex gap-4">
-                        <button 
+                        <button
                           onClick={() => setCurrentView('handbook')}
                           className="px-8 py-4 bg-brand-primary text-white rounded-2xl font-black text-sm hover:shadow-xl transition-all"
                         >
-                          CẨM NANG HỌC ĐƯỜNG
-                        </button>
-                        <button 
+                          {ui("CẨM NANG HỌC ĐƯỜNG")}</button>
+                        <button
                           onClick={() => setCurrentView('test-list')}
                           className="px-8 py-4 bg-white text-brand-primary border-2 border-brand-primary/10 rounded-2xl font-black text-sm hover:bg-gray-50 transition-all"
                         >
-                          LÀM TEST TÂM LÝ
-                        </button>
+                          {ui("LÀM TEST TÂM LÝ")}</button>
                       </div>
                     </div>
                     <div className="flex-1 relative">
                       <div className="w-full aspect-square bg-brand-primary/5 rounded-[3rem] overflow-hidden relative shadow-2xl border-8 border-white flex items-center justify-center">
-                        <img 
-                          src="/assets/hero.png" 
-                          alt="Hero" 
+                        <img
+                          src="/assets/hero.png"
+                          alt={ui("Hero")}
                           className="w-full h-full object-contain p-8"
                         />
                       </div>
@@ -6403,17 +6213,15 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
               {/* Psychology Content Grid */}
               <div className="mt-20 grid grid-cols-1 lg:grid-cols-3 gap-12">
                 <div className="bg-gradient-to-br from-brand-primary to-brand-secondary p-12 rounded-[2.5rem] text-white shadow-2xl shadow-brand-primary/20">
-                  <h2 className="text-4xl font-serif italic mb-6">Tin tức Tâm lý học</h2>
+                  <h2 className="text-4xl font-serif italic mb-6">{ui("Tin tức Tâm lý học")}</h2>
                   <p className="text-white/80 leading-relaxed mb-10 text-lg">
-                    Cập nhật những nghiên cứu mới nhất và các khái niệm tâm lý giúp bạn thấu hiểu bản thân và thế giới xung quanh.
-                  </p>
+                    {ui("Cập nhật những nghiên cứu mới nhất và các khái niệm tâm lý giúp bạn thấu hiểu bản thân và thế giới xung quanh.")}</p>
                   <a href="https://memart.vn/tin-tuc/suc-khoe-4/tim-hieu-ve-tam-ly-hoc-duong-la-gi-va-vai-tro-cua-no-vi-cb.html" target="_blank" rel="noopener noreferrer" className="inline-block bg-white text-brand-primary px-10 py-4 rounded-2xl font-black text-sm hover:scale-105 transition-all shadow-lg">
-                    XEM KIẾN THỨC
-                  </a>
+                    {ui("XEM KIẾN THỨC")}</a>
                   <div className="mt-14 -mb-2 overflow-visible">
                     <img
                       src="/assets/capybara_reading_paper.png"
-                      alt="Capybara đọc tài liệu tâm lý"
+                      alt={ui("Capybara đọc tài liệu tâm lý")}
                       className="w-[157%] md:w-[168%] max-w-none h-auto object-contain mx-[-28%] md:mx-[-34%]"
                     />
                   </div>
@@ -6489,7 +6297,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
             >
-              <ReportsView 
+              <ReportsView
                 userData={userData}
                 setCurrentView={setCurrentView}
                 onLogout={handleLogout}
@@ -6507,7 +6315,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
             >
-              <TestListView 
+              <TestListView
                 tests={tests}
                 onEdit={handleEditTest}
                 onDelete={(id) => {
@@ -6534,7 +6342,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
             >
-              <StudentTestsView 
+              <StudentTestsView
                 tests={tests}
                 onTakeTest={openTestTakingView}
                 userData={userData}
@@ -6553,8 +6361,8 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
             >
-              <AdminListView 
-                admins={admins} 
+              <AdminListView
+                admins={admins}
                 onBack={() => {
                   setFilterSchoolId(null);
                   setCurrentView('superadmin');
@@ -6590,8 +6398,8 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
             >
-              <SchoolListView 
-                schools={schools} 
+              <SchoolListView
+                schools={schools}
                 onBack={() => {
                   setFilterSchoolId(null);
                   setCurrentView('superadmin');
@@ -6614,7 +6422,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
             >
-              <TeacherListView 
+              <TeacherListView
                 teachers={filteredTeachers}
                 pendingTeachers={filteredPendingTeachers}
                 initialTypeFilter={teacherListInitialTypeFilter}
@@ -6654,8 +6462,8 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
             >
-              <ClassListView 
-                classes={filteredClasses} 
+              <ClassListView
+                classes={filteredClasses}
                 students={filteredStudents}
                 teachers={filteredTeachers}
                 initialSelectedClass={selectedClassForView}
@@ -6698,7 +6506,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
             >
-              <SuperAdminView 
+              <SuperAdminView
                 setCurrentView={setCurrentView}
                 admins={admins}
                 schools={schools}
@@ -6708,10 +6516,10 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                 userData={userData}
                 onLogout={handleLogout}
                 onViewSchool={(school) => {
-                  console.log('View school:', school);
+                  alert('Xem chi tiết trường tại danh sách trường; chưa có thao tác quản trị bổ sung.');
                 }}
                 onViewAdmin={(admin) => {
-                  console.log('View admin:', admin);
+                  alert('Chi tiết và quyền tài khoản nằm trong danh sách Admin.');
                 }}
                 setFilterSchoolId={setFilterSchoolId}
               />
@@ -6725,7 +6533,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
             >
-              <TeacherClassView 
+              <TeacherClassView
                 userData={userData}
                 setCurrentView={setCurrentView}
                 onLogout={handleLogout}
@@ -6745,8 +6553,8 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
             >
-              <AdminView 
-                setCurrentView={setCurrentView} 
+              <AdminView
+                setCurrentView={setCurrentView}
                 onOpenPendingTeachers={() => {
                   setTeacherListInitialTypeFilter('pending');
                   setCurrentView('teacher-list');
@@ -6790,7 +6598,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
             >
-              <TestEditorView 
+              <TestEditorView
                 test={activeTest}
                 onBack={() => setCurrentView('test-list')}
                 onSave={(updatedTest) => {
@@ -6799,7 +6607,9 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                       title: String(updatedTest.title || '').trim(),
                       description: String(updatedTest.desc || '').trim(),
                       targetAudience: mapLabelToApiAudience(String(updatedTest.targetAudience || 'Cả hai')),
-                      questionList: updatedTest.questionList ?? [],
+                      ...(updatedTest.isNewTemplate||updatedTest.questionsDirty?{questionList:updatedTest.questionList??[]}:{ }),
+                      durationMinutes:/^\d+/.test(String(updatedTest.time))?Number(String(updatedTest.time).match(/^\d+/)?.[0]):null,iconKey:updatedTest.icon||'Zap',colorKey:String(updatedTest.color||'bg-brand-primary').replace('bg-brand-',''),
+                      expectedVersion:Number(updatedTest.currentVersion??0),confirmEmptyQuestionBank:updatedTest.confirmEmptyQuestionBank===true,
                     };
 
                     const isNewTemplate = String(updatedTest.id || '').startsWith('tmp-') || updatedTest.isNewTemplate === true;
@@ -6853,23 +6663,23 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20 }}
             >
-              <TestTakingView 
+              <TestTakingView
                 test={activeTest}
                 userData={userData}
                 onBack={() => setCurrentView('test-list')}
-                onComplete={async ({ test, answers, score }) => {
+                onComplete={async ({ test, answers,draftId,definitionDigest,revision }) => {
                   if(demoAccount)throw new Error('Demo chỉ xem giao diện, không nộp kết quả thật.');
                   const submitResult = await testService.submitResult({
                     templateId: String(test.id),
                     answers,
-                    score,
+                    draftId,definitionDigest,revision,
                   });
 
                   if (!submitResult.ok) {
                     const message = 'error' in submitResult
                       ? submitResult.error.message
                       : 'Không thể nộp bài test.';
-                    throw new Error(message);
+                    throw new TestClientError('error' in submitResult?submitResult.error.code:'AUTH_SERVER_ERROR',message);
                   }
 
                   const newResult: TestResult = {
@@ -6888,13 +6698,9 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                     suggestDass21: submitResult.data.suggestDass21,
                     timestamp: Date.now(),
                   };
-                  setTestResults((prev) => [newResult, ...prev]);
+                  setTestResults((prev) => [newResult, ...prev.filter(r=>r.id!==newResult.id)]);
 
-                  return {
-                    scoreTotal: submitResult.data.scoreTotal,
-                    scoreLevel: submitResult.data.scoreLevel,
-                    suggestDass21: submitResult.data.suggestDass21,
-                  };
+                  return submitResult.data;
                 }}
                 onTakeDass21={() => {
                   const dassTest = tests.find(t => String(t.id) === '5')
@@ -6910,7 +6716,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
           )}
 
           {currentView === 'contact' && (
-            <motion.div 
+            <motion.div
               key="contact"
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
@@ -6919,10 +6725,9 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
             >
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-20">
                 <div>
-                  <h2 className="text-5xl font-serif italic text-brand-primary mb-8 leading-tight">Hãy kết nối với Trạm an</h2>
+                  <h2 className="text-5xl font-serif italic text-brand-primary mb-8 leading-tight">{ui("Hãy kết nối với Trạm an")}</h2>
                   <p className="text-gray-500 text-lg leading-relaxed mb-12">
-                    Mọi ý kiến đóng góp hoặc thắc mắc của bạn đều là món quà quý giá giúp Trạm an hoàn thiện hơn mỗi ngày.
-                  </p>
+                    {ui("Mọi ý kiến đóng góp hoặc thắc mắc của bạn đều là món quà quý giá giúp Trạm an hoàn thiện hơn mỗi ngày.")}</p>
                   <div className="space-y-8 mb-16">
                     {[
                       { icon: <Phone />, label: "Hotline", value: "0975614712", color: "bg-brand-primary/10 text-brand-primary" },
@@ -6942,41 +6747,41 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                   </div>
 
                   <div className="space-y-6">
-                    <h3 className="text-2xl font-serif italic text-brand-primary mb-6">Địa chỉ hỗ trợ tâm lý tại Đà Nẵng</h3>
+                    <h3 className="text-2xl font-serif italic text-brand-primary mb-6">{ui("Địa chỉ hỗ trợ tâm lý tại Đà Nẵng")}</h3>
                     <div className="grid grid-cols-1 gap-4">
                       {[
-                        { 
-                          name: "Bệnh viện Tâm thần Đà Nẵng", 
-                          phone: "0236 3842 326", 
+                        {
+                          name: "Bệnh viện Tâm thần Đà Nẵng",
+                          phone: "0236 3842 326",
                           address: "193 Nguyễn Lương Bằng, Liên Chiểu, Đà Nẵng",
                           desc: "Cơ sở y tế công lập chuyên khoa tâm thần hàng đầu tại Đà Nẵng, cung cấp dịch vụ khám và điều trị các rối loạn tâm lý, tâm thần."
                         },
-                        { 
-                          name: "Trung tâm Tư vấn Tâm lý - Giáo dục Đà Nẵng", 
-                          phone: "0236 3519 929", 
+                        {
+                          name: "Trung tâm Tư vấn Tâm lý - Giáo dục Đà Nẵng",
+                          phone: "0236 3519 929",
                           address: "33 Xô Viết Nghệ Tĩnh, Hải Châu, Đà Nẵng",
                           desc: "Chuyên tư vấn tâm lý học đường, tâm lý gia đình và các vấn đề phát triển kỹ năng sống cho trẻ em và thanh thiếu niên."
                         },
-                        { 
-                          name: "Bệnh viện Phụ sản - Nhi Đà Nẵng (Khoa Tâm lý)", 
-                          phone: "0236 3957 777", 
+                        {
+                          name: "Bệnh viện Phụ sản - Nhi Đà Nẵng (Khoa Tâm lý)",
+                          phone: "0236 3957 777",
                           address: "402 Lê Văn Hiến, Ngũ Hành Sơn, Đà Nẵng",
                           desc: "Đơn vị chuyên sâu về tâm lý nhi khoa, hỗ trợ can thiệp sớm và điều trị các vấn đề tâm lý ở trẻ em."
                         },
-                        { 
-                          name: "Trung tâm Hỗ trợ Phát triển Giáo dục Hòa nhập", 
-                          phone: "0236 3611 505", 
+                        {
+                          name: "Trung tâm Hỗ trợ Phát triển Giáo dục Hòa nhập",
+                          phone: "0236 3611 505",
                           address: "109 Phan Đăng Lưu, Hải Châu, Đà Nẵng",
                           desc: "Hỗ trợ giáo dục đặc biệt và tư vấn tâm lý cho trẻ em có nhu cầu đặc biệt, giúp trẻ hòa nhập cộng đồng."
                         }
                       ].map((center, idx) => (
                         <div key={idx} className="group">
-                          <button 
+                          <button
                             onClick={() => setSelectedCenter(selectedCenter === idx ? null : idx)}
                             className={cn(
                               "w-full text-left p-6 rounded-3xl border transition-all flex items-center justify-between gap-4",
-                              selectedCenter === idx 
-                                ? "bg-brand-primary text-white border-brand-primary shadow-lg shadow-brand-primary/20" 
+                              selectedCenter === idx
+                                ? "bg-brand-primary text-white border-brand-primary shadow-lg shadow-brand-primary/20"
                                 : "bg-white border-gray-100 hover:border-brand-primary/30 hover:bg-brand-primary/5"
                             )}
                           >
@@ -6991,7 +6796,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                             </div>
                             <ChevronRight size={18} className={cn("transition-transform", selectedCenter === idx && "rotate-90")} />
                           </button>
-                          
+
                           <AnimatePresence>
                             {selectedCenter === idx && (
                               <motion.div
@@ -7013,8 +6818,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                                     {center.desc}
                                   </p>
                                   <button className="w-full py-3 bg-brand-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-brand-primary/90 transition-all">
-                                    GỌI NGAY
-                                  </button>
+                                    {ui("GỌI NGAY")}</button>
                                 </div>
                               </motion.div>
                             )}
@@ -7025,28 +6829,28 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                   </div>
                 </div>
                 <div className="bg-white p-12 rounded-[3rem] border border-gray-100 shadow-xl self-start sticky top-32">
-                  <h3 className="font-bold text-2xl mb-8 text-gray-800">Gửi lời nhắn</h3>
+                  <h3 className="font-bold text-2xl mb-8 text-gray-800">{ui("Gửi lời nhắn")}</h3>
                   <form className="space-y-6">
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <label className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em] block mb-2">Họ tên</label>
+                        <label className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em] block mb-2">{ui("Họ tên")}</label>
                         <input type="text" className="w-full px-5 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all" />
                       </div>
                       <div>
-                        <label className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em] block mb-2">Email</label>
+                        <label className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em] block mb-2">{ui("Email")}</label>
                         <input type="email" className="w-full px-5 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all" />
                       </div>
                     </div>
                     <div>
-                      <label className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em] block mb-2">Chủ đề</label>
+                      <label className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em] block mb-2">{ui("Chủ đề")}</label>
                       <input type="text" className="w-full px-5 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none transition-all" />
                     </div>
                     <div>
-                      <label className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em] block mb-2">Nội dung</label>
+                      <label className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em] block mb-2">{ui("Nội dung")}</label>
                       <textarea rows={4} className="w-full px-5 py-4 rounded-2xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none resize-none transition-all"></textarea>
                     </div>
                     <button className="w-full bg-brand-primary text-white py-5 rounded-2xl font-black text-sm hover:shadow-2xl hover:shadow-brand-primary/30 transition-all flex items-center justify-center gap-3">
-                      GỬI TIN NHẮN <Send size={20} />
+                      {ui("GỬI TIN NHẮN")}{' '}<Send size={20} />
                     </button>
                   </form>
                 </div>
@@ -7063,7 +6867,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                 onLogout={handleLogout}
                 setFilterSchoolId={setFilterSchoolId}
               >
-                <AccountView 
+                <AccountView
                   userData={userData}
                   teacherRegCode={teacherRegCode}
                   setTeacherRegCode={setTeacherRegCode}
@@ -7081,7 +6885,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                 />
               </ManagementLayout>
             ) : (
-              <AccountView 
+              <AccountView
                 userData={userData}
                 teacherRegCode={teacherRegCode}
                 setTeacherRegCode={setTeacherRegCode}
@@ -7111,7 +6915,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                 onLogout={handleLogout}
                 setFilterSchoolId={setFilterSchoolId}
               >
-                <SettingsView 
+                <SettingsView
                   onBack={() => {
                     if (userData.role === 'Admin') setCurrentView('admin');
                     else if (userData.role === 'Quản trị viên cấp cao') setCurrentView('superadmin');
@@ -7129,7 +6933,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                 />
               </ManagementLayout>
             ) : (
-              <SettingsView 
+              <SettingsView
                 onBack={() => {
                   setCurrentView(getDefaultViewByRole(userData.role, userData.className, userData.teacherType));
                 }}
@@ -7170,19 +6974,18 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
       {!embedded && <footer className="bg-white border-t border-gray-100 py-6 px-8 sticky bottom-0 z-50 shadow-[0_-4px_20px_rgba(0,0,0,0.03)]">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="flex items-center gap-8">
-            <div 
+            <div
               onClick={() => setCurrentView('contact')}
               className="hidden lg:flex items-center gap-6 group cursor-pointer"
             >
               <div className="flex flex-col">
-                <span className="text-[11px] font-black uppercase tracking-[0.2em] text-brand-primary group-hover:text-brand-orange transition-colors">LIÊN HỆ VỚI CHÚNG TÔI</span>
+                <span className="text-[11px] font-black uppercase tracking-[0.2em] text-brand-primary group-hover:text-brand-orange transition-colors">{ui("LIÊN HỆ VỚI CHÚNG TÔI")}</span>
                 <div className="flex items-center gap-4 mt-1">
                   <div className="flex items-center gap-1.5 text-[10px] font-bold text-gray-500">
                     <Phone size={12} className="text-brand-primary" /> 0975614712
                   </div>
                   <div className="flex items-center gap-1.5 text-[10px] font-bold text-gray-500">
-                    <MailIcon size={12} className="text-brand-primary" /> hello.traman@gmail.com
-                  </div>
+                    <MailIcon size={12} className="text-brand-primary" /> {ui("hello.traman@gmail.com")}</div>
                 </div>
               </div>
               <div className="w-10 h-10 bg-brand-orange rounded-2xl flex items-center justify-center text-white shadow-lg shadow-brand-orange/20 transition-transform group-hover:translate-x-1">
@@ -7190,20 +6993,20 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
               </div>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-6">
             <div className="text-right hidden md:block">
-              <p className="text-[11px] font-black uppercase tracking-[0.2em] text-gray-400">Sẵn sàng hỗ trợ</p>
-              <p className="text-sm font-bold text-brand-primary">Chat Box bé Trạm</p>
+              <p className="text-[11px] font-black uppercase tracking-[0.2em] text-gray-400">{ui("Sẵn sàng hỗ trợ")}</p>
+              <p className="text-sm font-bold text-brand-primary">{ui("Chat Box bé Trạm")}</p>
             </div>
-            <button 
+            <button
               onClick={() => setIsChatOpen(!isChatOpen)}
               className="w-14 h-14 bg-brand-primary rounded-[1.25rem] flex items-center justify-center text-white shadow-xl shadow-brand-primary/30 hover:scale-110 transition-transform relative"
             >
               <span className="w-10 h-10 rounded-2xl bg-white/95 flex items-center justify-center shadow-md">
                 <img
                   src="/chatbot_mascot.png"
-                  alt="Chatbot Trạm An"
+                  alt={ui("Chatbot Trạm An")}
                   className="w-8 h-8 rounded-xl object-cover"
                   onError={(e) => {
                     e.currentTarget.style.display = 'none';
@@ -7224,7 +7027,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
       {/* Chat Popup */}
       <AnimatePresence>
         {isChatOpen && (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0, scale: 0.9, y: 40 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.9, y: 40 }}
@@ -7235,7 +7038,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                 <div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center">
                   <img
                     src="/chatbot_mascot.png"
-                    alt="Mascot Trạm An"
+                    alt={ui("Mascot Trạm An")}
                     className="w-9 h-9 rounded-xl object-cover bg-white/90"
                     onError={(e) => {
                       e.currentTarget.style.display = 'none';
@@ -7248,10 +7051,10 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                   </span>
                 </div>
                 <div>
-                  <p className="text-sm font-black uppercase tracking-widest">Hỗ trợ Trạm an</p>
+                  <p className="text-sm font-black uppercase tracking-widest">{ui("Hỗ trợ Trạm an")}</p>
                   <div className="flex items-center gap-2">
                     <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
-                    <p className="text-[10px] opacity-80 font-bold">Đang online</p>
+                    <p className="text-[10px] opacity-80 font-bold">{ui("Đang online")}</p>
                   </div>
                 </div>
               </div>
@@ -7284,7 +7087,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                       <div className="w-8 h-8 rounded-xl bg-white border border-gray-200 shadow-sm overflow-hidden shrink-0 mb-1">
                         <img
                           src="/chatbot_mascot.png"
-                          alt="Bé Trạm"
+                          alt={ui("Bé Trạm")}
                           className="w-full h-full object-cover"
                           onError={(e) => {
                             e.currentTarget.style.display = 'none';
@@ -7332,7 +7135,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                                   }}
                                   className="px-2.5 py-1 rounded-full bg-brand-primary/10 text-[10px] font-black text-brand-primary hover:bg-brand-primary hover:text-white transition-all"
                                 >
-                                  Mở cẩm nang: {getHandbookSectionTitle(sectionId)}
+                                  {ui("Mở cẩm nang:")}{' '}{getHandbookSectionTitle(sectionId)}
                                 </button>
                               ))}
                             </div>
@@ -7348,13 +7151,12 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                   <div className="w-8 h-8 rounded-xl bg-white border border-gray-200 shadow-sm overflow-hidden shrink-0 mb-1">
                     <img
                       src="/chatbot_mascot.png"
-                      alt="Bé Trạm"
+                      alt={ui("Bé Trạm")}
                       className="w-full h-full object-cover"
                     />
                   </div>
                   <div className="bg-white p-4 rounded-3xl rounded-tl-none shadow-sm text-sm text-gray-500 max-w-[85%] leading-relaxed">
-                    Bé Trạm đang suy nghĩ...
-                  </div>
+                    {ui("Bé Trạm đang suy nghĩ...")}</div>
                 </div>
               )}
             </div>
@@ -7373,7 +7175,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                       void handleSendChatMessage();
                     }
                   }}
-                  placeholder="Nhập lời nhắn..."
+                  placeholder={ui("Nhập lời nhắn...")}
                   className="flex-1 bg-gray-50 border-none rounded-2xl px-5 py-3 text-sm outline-none focus:ring-2 focus:ring-brand-primary/20"
                 />
                 <button
@@ -7399,13 +7201,13 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
       {/* User Profile Modal */}
       <AnimatePresence>
         {showApprovalModal && (
-          <motion.div 
+          <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-[100] flex items-center justify-center px-4 bg-brand-primary/20 backdrop-blur-sm"
           >
-            <motion.div 
+            <motion.div
               initial={{ scale: 0.9, opacity: 0, y: 20 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
               exit={{ scale: 0.9, opacity: 0, y: 20 }}
@@ -7414,22 +7216,20 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
               <div className="w-20 h-20 bg-brand-orange/10 rounded-full flex items-center justify-center text-brand-orange mx-auto mb-6">
                 <Clock size={40} />
               </div>
-              <h3 className="text-2xl font-serif italic text-brand-primary mb-4">Đang kiểm duyệt</h3>
+              <h3 className="text-2xl font-serif italic text-brand-primary mb-4">{ui("Đang kiểm duyệt")}</h3>
               <p className="text-gray-500 text-sm leading-relaxed mb-8">
-                Tài khoản giáo viên của bạn đang được hệ thống kiểm duyệt. Chúng tôi sẽ gửi thông báo sớm nhất có thể.
-              </p>
-              <button 
+                {ui("Tài khoản giáo viên của bạn đang được hệ thống kiểm duyệt. Chúng tôi sẽ gửi thông báo sớm nhất có thể.")}</p>
+              <button
                 onClick={() => setShowApprovalModal(false)}
                 className="w-full bg-brand-primary text-white py-4 rounded-2xl font-black text-sm hover:shadow-xl hover:shadow-brand-primary/20 transition-all"
               >
-                ĐÃ HIỂU
-              </button>
+                {ui("ĐÃ HIỂU")}</button>
             </motion.div>
           </motion.div>
         )}
 
         {isChangePasswordModalOpen && (
-          <ChangePasswordModal 
+          <ChangePasswordModal
             isOpen={isChangePasswordModalOpen}
             onClose={() => setIsChangePasswordModalOpen(false)}
             onConfirm={onConfirmPasswordChange}
@@ -7440,21 +7240,21 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
         {/* Teacher Detail Modal */}
         {isTeacherDetailOpen && selectedTeacher && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={closeTeacherDetailModal}
               className="absolute inset-0 bg-black/40 backdrop-blur-sm"
             />
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0, scale: 0.9, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
               className="relative w-full max-w-md bg-white rounded-[3rem] shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
             >
               <div className="bg-brand-orange p-10 text-white text-center relative shrink-0">
-                <button 
+                <button
                   onClick={closeTeacherDetailModal}
                   className="absolute top-6 right-6 p-2 hover:bg-white/10 rounded-xl transition-colors"
                 >
@@ -7465,17 +7265,17 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                 </div>
                 <h3 className="text-2xl font-black tracking-tight">{selectedTeacher.name}</h3>
                 <p className="text-white/60 text-sm font-bold uppercase tracking-widest mt-1">
-                  {String(selectedTeacher.status || '') === 'pending' ? 'GIÁO VIÊN ĐANG CHỜ PHÊ DUYỆT' : 'GIÁO VIÊN TRẠM AN'}
+                  {String(selectedTeacher.status || '') === 'pending' ? ui("GIÁO VIÊN ĐANG CHỜ PHÊ DUYỆT") : ui("GIÁO VIÊN TRẠM AN")}
                 </p>
               </div>
-              
+
               <div className="p-10 space-y-6 overflow-y-auto no-scrollbar">
                 {isEditingTeacher ? (
                   <div className="space-y-4">
                     <div>
-                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Họ và tên</label>
-                      <input 
-                        type="text" 
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">{ui("Họ và tên")}</label>
+                      <input
+                        type="text"
                         value={selectedTeacher.fullName || selectedTeacher.name}
                         onChange={(e) => setSelectedTeacher({...selectedTeacher, fullName: e.target.value, name: e.target.value})}
                         className="w-full px-4 py-3 rounded-xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none font-bold text-gray-700"
@@ -7483,18 +7283,18 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Năm sinh</label>
-                        <input 
-                          type="text" 
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">{ui("Năm sinh")}</label>
+                        <input
+                          type="text"
                           value={selectedTeacher.birthYear || ''}
                           onChange={(e) => setSelectedTeacher({...selectedTeacher, birthYear: e.target.value})}
                           className="w-full px-4 py-3 rounded-xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none font-bold text-gray-700"
                         />
                       </div>
                       <div>
-                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Số điện thoại</label>
-                        <input 
-                          type="text" 
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">{ui("Số điện thoại")}</label>
+                        <input
+                          type="text"
                           value={selectedTeacher.phoneNumber || ''}
                           onChange={(e) => setSelectedTeacher({...selectedTeacher, phoneNumber: e.target.value})}
                           className="w-full px-4 py-3 rounded-xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none font-bold text-gray-700"
@@ -7502,18 +7302,18 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                       </div>
                     </div>
                     <div>
-                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Email</label>
-                      <input 
-                        type="email" 
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">{ui("Email")}</label>
+                      <input
+                        type="email"
                         value={selectedTeacher.email || ''}
                         onChange={(e) => setSelectedTeacher({...selectedTeacher, email: e.target.value})}
                         className="w-full px-4 py-3 rounded-xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none font-bold text-gray-700"
                       />
                     </div>
                     <div>
-                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">Trường công tác</label>
-                      <input 
-                        type="text" 
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block mb-1">{ui("Trường công tác")}</label>
+                      <input
+                        type="text"
                         value={selectedTeacher.school || ''}
                         onChange={(e) => setSelectedTeacher({...selectedTeacher, school: e.target.value})}
                         className="w-full px-4 py-3 rounded-xl bg-gray-50 border-none focus:ring-2 focus:ring-brand-primary/20 outline-none font-bold text-gray-700"
@@ -7523,55 +7323,55 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                 ) : (
                   <div className="grid grid-cols-2 gap-8">
                     <div className="col-span-2 space-y-1">
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Họ và tên</p>
+                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{ui("Họ và tên")}</p>
                       <p className="font-bold text-gray-700 text-lg">{selectedTeacher.fullName || selectedTeacher.name}</p>
                     </div>
                     <div className="space-y-1">
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Tên đăng nhập</p>
+                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{ui("Tên đăng nhập")}</p>
                       <p className="font-bold text-gray-700">{selectedTeacher.username}</p>
                     </div>
                     <div className="space-y-1">
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Năm sinh</p>
+                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{ui("Năm sinh")}</p>
                       <p className="font-bold text-gray-700">{selectedTeacher.birthYear || '-'}</p>
                     </div>
                     <div className="col-span-2 space-y-1">
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Email</p>
+                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{ui("Email")}</p>
                       <p className="font-bold text-gray-700">{selectedTeacher.email || '-'}</p>
                     </div>
                     <div className="col-span-2 space-y-1">
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Số điện thoại</p>
+                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{ui("Số điện thoại")}</p>
                       <p className="font-bold text-gray-700">{selectedTeacher.phoneNumber || '-'}</p>
                     </div>
                     <div className="col-span-2 space-y-1">
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Trường công tác</p>
+                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{ui("Trường công tác")}</p>
                       <p className="font-bold text-gray-700">{selectedTeacher.school}</p>
                     </div>
                   </div>
                 )}
                   <div className="col-span-2 space-y-1">
-                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Lớp phụ trách</p>
+                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{ui("Lớp phụ trách")}</p>
                     <div className="flex flex-wrap gap-2 mt-2">
                       {classes.filter(c => c.teacherName === selectedTeacher.name).map(c => (
                         <span key={c.id} className="px-3 py-1 bg-brand-orange/10 text-brand-orange text-[10px] font-black uppercase tracking-widest rounded-full">
-                          Lớp {c.name}
+                          {ui("Lớp")}{' '}{c.name}
                         </span>
                       ))}
                       {classes.filter(c => c.teacherName === selectedTeacher.name).length === 0 && (
-                        <p className="text-sm text-gray-400 italic">Chưa phụ trách lớp nào</p>
+                        <p className="text-sm text-gray-400 italic">{ui("Chưa phụ trách lớp nào")}</p>
                       )}
                     </div>
                   </div>
                   <div className="col-span-2 space-y-1">
-                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Thống kê trắc nghiệm</p>
+                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{ui("Thống kê trắc nghiệm")}</p>
                     <div className="grid grid-cols-2 gap-4 mt-2">
                       <div className="p-4 bg-gray-50 rounded-2xl">
-                        <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1">Lượt test</p>
+                        <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1">{ui("Lượt test")}</p>
                         <p className="text-xl font-black text-brand-primary">
                           {testResults.filter(r => r.userId === selectedTeacher.id).length}
                         </p>
                       </div>
                       <div className="p-4 bg-gray-50 rounded-2xl">
-                        <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1">Điểm TB</p>
+                        <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1">{ui("Điểm TB")}</p>
                         <p className="text-xl font-black text-brand-orange">
                           {testResults.filter(r => r.userId === selectedTeacher.id).length > 0
                             ? Math.round(testResults.filter(r => r.userId === selectedTeacher.id).reduce((acc, r) => acc + r.score, 0) / testResults.filter(r => r.userId === selectedTeacher.id).length)
@@ -7601,7 +7401,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                             : 'bg-brand-primary text-white shadow-lg shadow-brand-primary/20 hover:scale-[1.02]',
                         )}
                       >
-                        {isTeacherReviewLoading ? 'ĐANG XỬ LÝ...' : 'PHÊ DUYỆT'}
+                        {isTeacherReviewLoading ? ui("ĐANG XỬ LÝ...") : ui("PHÊ DUYỆT")}
                       </button>
                       <button
                         onClick={() => {
@@ -7621,33 +7421,29 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
                             : 'bg-red-100 text-red-600 hover:bg-red-200',
                         )}
                       >
-                        TỪ CHỐI
-                      </button>
+                        {ui("TỪ CHỐI")}</button>
                     </>
                   ) : isEditingTeacher ? (
-                    <button disabled data-unavailable="true" 
+                    <button disabled data-unavailable="true"
                       onClick={handleSaveTeacherProfile}
                       className="flex-1 bg-brand-primary text-white py-4 rounded-2xl font-black text-sm shadow-lg shadow-brand-primary/20 hover:scale-[1.02] transition-all"
                     >
-                      LƯU THAY ĐỔI
-                    </button>
+                      {ui("LƯU THAY ĐỔI")}</button>
                   ) : (
-                    <button 
+                    <button
                       onClick={() => {
                         setEditingTeacherOriginalName(selectedTeacher.fullName || selectedTeacher.name);
                         setIsEditingTeacher(true);
                       }}
                       className="flex-1 bg-brand-orange text-white py-4 rounded-2xl font-black text-sm shadow-lg shadow-brand-orange/20 hover:scale-[1.02] transition-all"
                     >
-                      CHỈNH SỬA
-                    </button>
+                      {ui("CHỈNH SỬA")}</button>
                   )}
-                  <button 
+                  <button
                     onClick={closeTeacherDetailModal}
                     className="flex-1 bg-gray-100 text-gray-600 py-4 rounded-2xl font-black text-sm hover:bg-gray-200 transition-all"
                   >
-                    ĐÓNG
-                  </button>
+                    {ui("ĐÓNG")}</button>
                 </div>
               </div>
             </motion.div>
@@ -7658,7 +7454,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
       <style dangerouslySetInnerHTML={{ __html: `
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-        
+
         .markdown-body h2 {
           font-family: 'Playfair Display', serif;
           font-style: italic;

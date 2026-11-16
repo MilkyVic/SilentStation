@@ -1,63 +1,37 @@
-# Trạm An development
+# SilentStation development (native)
 
-Run all commands from the SilentStation checkout. The parent source folder is read-only input and is not a second app to modify.
+Run from this checkout only. The parent source folder and other projects are not write targets. Node 22, PostgreSQL 16, OpenSSL and Chromium must already be available; no automatic global installs/config changes.
 
-## UI demo (no DB or service credentials)
+## Real local UI vs demo
+The existing 4189 serves a production frontend + actual compiled API and its retained test DB. Build/test must not restart/reset it. UI demo remains a separate optional mode on 4173; no demo role switch or fixture fallback is allowed in real mode.
 
+## Gates
 ```sh
-npm run dev:demo -- --host 127.0.0.1 --port 4173
-# or build an isolated demo output:
-npm run build:demo
-npm run preview:demo
-```
-
-Open localhost port 4173. Use campaign code **DEMO** and the labeled role switcher. Mutations/API calls from compatibility services are blocked in demo. Source fixtures never silently replace failed API data in ordinary mode. The demo draft is simulated in memory, not durable server storage.
-
-## Validation
-
-```sh
+npm ci
 npm run lint
 npm test
 npm run build
 npm run build:api
+npm run build:acceptance
 npm run test:integration
+npm run test:native
 ```
 
-The integration runner creates a NEW PostgreSQL cluster in the OS temporary directory, binds only loopback on a free port, generates its own test DB name/auth secret, disables real collection/Gemini/SMTP, then stops and deletes exactly that cluster. It never uses DATABASE_URL inherited from an existing environment. Set `PG_BIN` to an installed PostgreSQL binary directory if needed; the current macOS default is PostgreSQL 16 in Homebrew.
+Unit DB harnesses skip outside their explicitly selected disposable DB. Integration creates its own cluster, binds loopback and disables real providers/collection; it never uses a Neon target from environment. Native acceptance uses a separate production-mode API, private CA, PG TLS and Node SMTP sink. No CA is installed globally and no mail is relayed.
 
-A single integration harness is skipped in the offline unit command. It is exercised by `test:integration` against the disposable database.
-
-## Explicit local API setup
-
-Do NOT point these commands at a shared/staging/production DB without separate authorization.
-
+For actual-API browser tests select a free non-4189 port:
 ```sh
-# Set DATABASE_URL to your explicitly selected isolated development DB.
-MIGRATION_CONFIRM=yes npm run db:migrate
-# Optional, only an explicitly selected development DB:
-ALLOW_DEMO_SEED=true npm run db:seed:demo
-npm run dev:api
-npm run dev
+SS_UI_BASE=http://127.0.0.1:4211 SS_WEB_PORT=4211 SS_WEB_ORIGIN=http://127.0.0.1:4211 \
+SS_WEB_CREDENTIAL_FILE=.acceptance/native-ui-credentials.json npm run test:ui-live
+npm run test:ui-print
 ```
 
-Startup/health do not create schemas, seed credentials or overwrite templates. Missing migrations are an error, not permission to mutate a DB on a GET. `start:api` uses `dist-server/server/auth-server.js`; run a fresh API build first. Old flat checked-in dist-server files are historical artifacts, not the runtime entry.
+Local HTTP is not the Vercel Preview HTTPS/cookie gate. See [native/cloud runbook](NATIVE_ACCEPTANCE_RUNBOOK.md) for TLS, SMTP, scheduler and cloud evidence boundaries.
 
-Cookie-mode web API calls use the same-origin proxy. Configure `APP_URL` to the frontend origin. Production requires a strong project-specific AUTH_SESSION_SECRET, verified DB TLS, explicit origins and HTTPS. Browser auth tokens and answer drafts are not kept in localStorage.
+## Migrations and fixtures
+MIGRATION_CONFIRM=yes must be deliberate, against an explicitly selected DB. No startup/request/health migration or seed. Ledger/checksum mismatch or unknown baseline fails closed. Native initializer accepts only a NEW empty loopback database with namespace/run-id confirmation; never Neon. Do not use demo seeding for cloud bootstrapping.
 
-## Anonymous survey API
+## Package and maintenance
+`npm run package:acceptance` includes untracked source, excludes credentials/input documents and produces manifest format 2. Validate extracted package via `python3 scripts/acceptance.py verify` and `preflight`, then clean install/build/test.
 
-- Public: `GET /api/surveys/campaigns/:code`.
-- Consent/session: `POST .../:code/session` with `{consent:true,consentVersion}`.
-- Draft: `GET/PUT/DELETE .../:code/draft`; PUT requires `{answers,reviewedSections,revision}`.
-- Submit: `POST .../:code/submit` with `{revision,idempotencyKey}`; returns `{receipt:{responseId,savedAt}}`.
-- Admin: campaign list/create/update, grants, aggregate report, authorized response and CSV export under `/api/surveys/admin/campaigns`.
-- Raw access and export are separate grants; even Superadmin is denied by default. Admin school scope still applies.
-- Stored answer states are `answered`, `skipped`, `unanswered`. K/unknown knowledge are real answer values. Incomplete scales are `insufficient_data`; complete but unapproved rules are `unapproved`.
-- Definitions are immutable by version. Reusing a version for different content is rejected; the current draft instrument cannot collect real data.
-- Anonymous rows do not have an auth `user_id`. Do not add identification/fingerprinting or forward A–J answers into chatbot prompts.
-
-## Maintenance / environment gates
-
-A scheduler is NOT enabled by default. After explicit deployment approval, provision CRON_SECRET within this project and configure your chosen platform to call the guarded maintenance endpoint. Verify draft erasure timing before publishing a retention promise. Draft ciphertext keys derive from campaign/session and the browser's random cookie, which is not stored in plaintext in DB.
-
-Full policy review, support-contact verification, runtime/platform tests and rollout authorization are required before real collection. `SURVEY_REAL_COLLECTION_ENABLED` and `SURVEY_ALLOW_SERVER_DEMO` default false. Do not activate them solely to bypass a gate.
+Cloudflare Worker is code only, disabled/no triggers. Optional native maintenance requires explicit HTTPS base and project CRON_SECRET; no automatic attachment to 4189. Cloud activation/Neon migration/deploy/push require separate authorization. Keep SURVEY_REAL_COLLECTION_ENABLED=false and do not change auth encryption secrets for existing data.

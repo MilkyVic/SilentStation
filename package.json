@@ -1,7 +1,7 @@
 {
-  "name": "react-example",
+  "name": "silentstation",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -16,13 +16,17 @@
     "loadtest:pilot": "tsx server/loadtest/pilot-800.ts",
     "dev:demo": "vite --mode demo",
     "build:demo": "vite build --mode demo --outDir dist-demo",
-    "test": "tsx --test src/services/authService.test.ts server/test-scoring/engine.test.ts server/*.test.ts server/surveys/*.test.ts",
+    "test": "tsx --test src/services/authService.test.ts server/test-scoring/engine.test.ts server/*.test.ts server/surveys/*.test.ts src/features/survey/SurveyPrint.test.tsx src/lib/save-queue.test.ts src/features/shell/ProfileMenu.test.tsx src/features/preferences/ui.test.ts",
     "test:integration": "node scripts/test-disposable-db.mjs",
     "db:migrate": "tsx server/migrate.ts",
     "db:seed:demo": "tsx server/seed-demo.ts",
     "preview:demo": "vite preview --mode demo --outDir dist-demo --host 127.0.0.1 --port 4173",
     "build:acceptance": "tsc -p tsconfig.acceptance.json",
-    "package:acceptance": "python3 scripts/package-acceptance.py"
+    "package:acceptance": "python3 scripts/package-acceptance.py",
+    "test:ui-print": "vite build --mode demo --config tests/ui-print/vite.config.ts && playwright test --config tests/ui-print/playwright.config.ts",
+    "test:ui-live": "npm run build:api && VITE_ACCEPTANCE_BANNER=true vite build --outDir .acceptance/ui-live && playwright test --config tests/ui-live/playwright.config.ts",
+    "build:native": "tsc -p tsconfig.acceptance.json --outDir .acceptance/native-api",
+    "test:native": "npm run build:native && SS_NATIVE_BUILD_DIR=.acceptance/native-api node scripts/test-native-acceptance.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
@@ -35,6 +39,7 @@
     "motion": "^12.23.24",
     "nodemailer": "10.5.0",
     "pg": "^8.20.0",
+    "qrcode": "1.5.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
@@ -42,26 +47,40 @@
     "recharts": "^2.15.0",
     "rehype-raw": "^7.0.0",
     "tailwind-merge": "^3.5.0",
-    "vite": "^6.2.0"
+    "vite": "6.4.6"
   },
   "devDependencies": {
     "@playwright/test": "1.56.1",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/pg": "^8.20.0",
+    "@types/qrcode": "1.5.6",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/smtp-server": "3.5.13",
     "autoprefixer": "^10.4.21",
+    "jsqr": "1.4.0",
+    "smtp-server": "3.21.5",
     "tailwindcss": "^4.1.14",
-    "tsx": "^4.21.0",
+    "tsx": "4.22.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "vite": "6.4.6"
   },
   "overrides": {
     "protobufjs": "7.6.6",
     "proxy-addr": "2.0.8",
     "body-parser": "1.20.9",
     "qs": "6.16.1",
-    "ws": "8.21.0"
+    "ws": "8.21.0",
+    "lodash": "4.18.1",
+    "@babel/core": "7.29.6",
+    "browserslist": "4.28.7",
+    "baseline-browser-mapping": "2.11.0",
+    "postcss": "8.5.23",
+    "source-map-js": "1.2.2",
+    "nanoid": "3.3.18",
+    "tsx": {
+      "esbuild": "0.28.1"
+    }
   }
 }

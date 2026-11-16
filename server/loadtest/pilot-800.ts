@@ -1,4 +1,5 @@
 import 'dotenv/config';
+throw new Error('Pilot benchmark is disabled: the old numeric-answer contract is retired. A new versioned, owned-database load run requires a separate resource window and approval.');
 
 type RequestMetric = {
   ok: boolean;

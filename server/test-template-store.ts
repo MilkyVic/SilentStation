@@ -32,6 +32,6 @@ export async function replaceQuestions(client: PoolClient, id: string, questions
 export async function appendVersion(client: PoolClient, row: any, action: string, actorId: string) {
     await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [row.id]);
     const v = await client.query('SELECT COALESCE(MAX(version_number),0)+1 AS n FROM test_template_versions WHERE template_id=$1', [row.id]);
-    const q = await client.query('SELECT q.question_order,q.content,q.subscale,q.is_reverse,o.option_order,o.label,o.score FROM test_questions q LEFT JOIN test_options o ON o.question_id=q.id WHERE q.template_id=$1 ORDER BY q.question_order,o.option_order', [row.id]);
+    const q = await client.query('SELECT q.id AS question_id,q.question_order,q.content,q.subscale,q.is_reverse,o.id AS option_id,o.option_order,o.label,o.score FROM test_questions q LEFT JOIN test_options o ON o.question_id=q.id WHERE q.template_id=$1 ORDER BY q.question_order,o.option_order', [row.id]);
     await client.query('INSERT INTO test_template_versions(id,template_id,version_number,action,actor_user_id,snapshot) VALUES($1,$2,$3,$4,$5,$6::jsonb)', [crypto.randomUUID(), row.id, v.rows[0].n, action, actorId, JSON.stringify({ template: row, questions: q.rows })]);
 }

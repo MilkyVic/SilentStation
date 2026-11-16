@@ -3,6 +3,8 @@ import crypto from 'node:crypto';
 import { Pool } from 'pg';
 import nodemailer from 'nodemailer';
 import { databaseConfig, validateSessionSecret, validateRuntime, smtpConfig, secretValue } from './runtime-config.js';
+import { registrationContext } from './accounts/registration.js';
+import { password as validateNewPassword } from './accounts/common.js';
 import { consumeRate, passwordAttempt } from './rate-limits.js';
 export class AuthHttpError extends Error {
     statusCode;
@@ -237,7 +239,7 @@ const createLoginSessionResult = async (account) => {
         status: account.status,
         iat: now,
         exp,
-        jti: crypto.randomUUID(),
+        jti: crypto.randomUUID(), credentialVersion:account.credentialVersion??0,
     };
     await insertSession(tokenPayload);
     const accessToken = signAccessToken(tokenPayload);
@@ -403,10 +405,10 @@ const mapUserRow = (row) => ({
     username: row.username,
     passwordHash: row.password_hash,
     role: row.role,
-    status: row.status,
+    status: row.status, revision:row.revision??0,credentialVersion:row.credential_version??0,
     profile: {
         name: row.profile_name,
-        email: row.profile_email,
+        email: row.profile_email, schoolId:row.school_id??null,classId:row.class_id??null,revision:row.revision??0,bio:row.profile_bio??'',avatarKey:row.avatar_key??'mascot',emailVerified:!!row.email_verified_at,
         birthYear: row.profile_birth_year,
         gender: row.profile_gender,
         school: normalizeSchoolName(row.profile_school),
@@ -420,7 +422,7 @@ const toApiUser = (account) => ({
     id: account.id,
     username: account.username,
     role: account.role,
-    status: account.status,
+    status: account.status,revision:account.revision??0,
     profile: account.profile,
 });
 const mapJoinCodeRow = (row) => ({
@@ -491,7 +493,7 @@ const findAccountByUsername = async (username) => {
         profile_class_name,
         profile_phone,
         profile_teacher_type,
-        profile_subject
+        profile_subject, revision,credential_version,school_id,class_id,profile_bio,avatar_key,email_verified_at,activation_pending,disabled_from_status
       FROM auth_users
       WHERE username = $1
       LIMIT 1
@@ -516,7 +518,7 @@ const findAccountById = async (id) => {
         profile_class_name,
         profile_phone,
         profile_teacher_type,
-        profile_subject
+        profile_subject, revision,credential_version,school_id,class_id,profile_bio,avatar_key,email_verified_at,activation_pending,disabled_from_status
       FROM auth_users
       WHERE id = $1
       LIMIT 1
@@ -656,6 +658,7 @@ export const healthCheck = async () => {
     return { ok: true, service: 'auth-api' };
 };
 const validateRegisterInputForOtp = (payload) => {
+    validateNewPassword(payload?.password);
     const normalizedUsername = typeof payload.username === 'string'
         ? normalizeUsername(payload.username)
         : '';
@@ -833,7 +836,7 @@ export const registerAccount = async (payload) => {
         if (existing) {
             throw new AuthHttpError(409, 'AUTH_USERNAME_EXISTS', 'Ten dang nhap da ton tai.');
         }
-        await insertAccount(account);
+        const created=await getPool().connect();try{await created.query('BEGIN');await insertAccountWithClient(created,account);await registrationContext(created,account);await created.query('COMMIT');}catch(e){await created.query('ROLLBACK');throw e;}finally{created.release();}
         return toApiUser(account);
     }
     const client = await getPool().connect();
@@ -857,7 +860,7 @@ export const registerAccount = async (payload) => {
           used_count,
           status,
           created_at,
-          revoked_at
+          revoked_at,school_id,class_id
         FROM class_join_codes
         WHERE code_hash = $1
         LIMIT 1
@@ -913,6 +916,7 @@ export const registerAccount = async (payload) => {
         account.profile.teacherType = '';
         account.profile.subject = '';
         await insertAccountWithClient(client, account);
+        await registrationContext(client,account,joinCode);
         await insertClassJoinCodeEvent({
             eventType: 'redeem_success',
             teacherId: joinCode.teacher_id,
@@ -947,7 +951,8 @@ const validateCreateAdminPayload = (payload) => {
     if (!normalizedUsername) {
         throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Thieu ten dang nhap admin.');
     }
-    if (!password || password.length < 6) {
+    validateNewPassword(password);
+    if (!password) {
         throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Mat khau admin toi thieu 6 ky tu.');
     }
     if (!name) {
@@ -991,7 +996,7 @@ export const listAdminAccounts = async (token) => {
         profile_class_name,
         profile_phone,
         profile_teacher_type,
-        profile_subject
+        profile_subject, revision,credential_version,school_id,class_id,profile_bio,avatar_key,email_verified_at,activation_pending,disabled_from_status
       FROM auth_users
       WHERE role = 'admin'
       ORDER BY created_at ASC
@@ -1083,7 +1088,7 @@ export const listScopedUsers = async (token, query = {}) => {
         profile_phone,
         profile_teacher_type,
         profile_subject,created_at,
-        TO_CHAR(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_time
+        TO_CHAR(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_time, revision,credential_version,school_id,class_id,profile_bio,avatar_key,email_verified_at,activation_pending,disabled_from_status
       FROM auth_users
       WHERE ${clauses.join(' AND ')}
       ORDER BY created_at DESC,id DESC
@@ -1122,7 +1127,7 @@ export const approveTeacherAccount = async (token, payload = {}) => {
         profile_class_name,
         profile_phone,
         profile_teacher_type,
-        profile_subject
+        profile_subject, revision,credential_version,school_id,class_id,profile_bio,avatar_key,email_verified_at,activation_pending,disabled_from_status
       FROM auth_users
       WHERE id = $1
       LIMIT 1
@@ -1195,7 +1200,7 @@ export const rejectTeacherAccount = async (token, payload = {}) => {
         profile_class_name,
         profile_phone,
         profile_teacher_type,
-        profile_subject
+        profile_subject, revision,credential_version,school_id,class_id,profile_bio,avatar_key,email_verified_at,activation_pending,disabled_from_status
       FROM auth_users
       WHERE id = $1
       LIMIT 1
@@ -1218,7 +1223,7 @@ export const rejectTeacherAccount = async (token, payload = {}) => {
         throw new AuthHttpError(400, 'AUTH_SERVER_ERROR', 'Chi co the tu choi giao vien dang cho duyet.');
     }
     await getPool().query(`
-      DELETE FROM auth_users
+      UPDATE auth_users SET status='suspended',disabled_at=NOW(),disabled_from_status=NULL,revision=revision+1,credential_version=credential_version+1
       WHERE id = $1
     `, [teacherId]);
     try {
@@ -1276,6 +1281,7 @@ export const createAdminAccount = async (token, payload) => {
 export const createClassJoinCode = async (token, input = {}) => {
     await initializeAuthCore();
     const user = await getCurrentUser(token);
+    if(process.env.ACCOUNT_MANAGEMENT_ENABLED==='true'){const r=(await getPool().query("SELECT 1 FROM auth_users u JOIN org_classes c ON c.id=u.class_id JOIN org_schools s ON s.id=u.school_id JOIN org_assignments x ON x.user_id=u.id AND x.class_id=c.id AND x.homeroom AND x.ended_at IS NULL WHERE u.id=$1 AND c.status='active' AND s.status='active'",[user.id])).rows;if(!r.length)throw new AuthHttpError(403,'AUTH_INVALID_ROLE','Cần phân công GVCN và lớp/niên khóa hợp lệ.');}
     if (user.role !== 'teacher') {
         throw new AuthHttpError(403, 'AUTH_INVALID_ROLE', 'Chi giao vien moi duoc tao ma lop.');
     }
@@ -1355,7 +1361,8 @@ export const createClassJoinCode = async (token, input = {}) => {
                     school: normalizeSchoolName(user.profile.school || ''),
                     note: 'teacher_created_code',
                 }, client);
-                await client.query('COMMIT');
+                if(process.env.ACCOUNT_MANAGEMENT_ENABLED==='true')await client.query('UPDATE class_join_codes SET school_id=$2,class_id=$3 WHERE id=$1',[inserted.rows[0].id,user.profile.schoolId,user.profile.classId]);
+            await client.query('COMMIT');
                 return {
                     code,
                     data: mapJoinCodeRow(inserted.rows[0]),
@@ -1520,6 +1527,7 @@ export const getCurrentUser = async (token) => {
     if (!account) {
         throw new AuthHttpError(401, 'AUTH_INVALID_CREDENTIALS', 'Khong tim thay tai khoan dang nhap.');
     }
+    if ((payload.credentialVersion??0)!==(account.credentialVersion??0)) throw new AuthHttpError(401,'AUTH_INVALID_CREDENTIALS','Thông tin phiên đã thay đổi.');
     if (account.status !== 'active') throw new AuthHttpError(403, 'AUTH_PENDING_APPROVAL', 'Tài khoản không còn hoạt động.');
     return toApiUser(account);
 };
@@ -1550,4 +1558,4 @@ export const logoutToken = async (token) => {
 
 export const closeAuthDatabase = async () => { if (pool) { await pool.end(); pool=null; initializedPromise=null; } };
 
-export const listRegistrationSchools = async () => { await initializeAuthCore(); const r=await getPool().query("SELECT DISTINCT profile_school FROM auth_users WHERE role='admin' AND status='active' AND profile_school<>'' ORDER BY profile_school"); return r.rows.map((row,index)=>({id:String(index),name:normalizeSchoolName(row.profile_school)})); };
+export const listRegistrationSchools = async () => { await initializeAuthCore(); if(process.env.ACCOUNT_MANAGEMENT_ENABLED==='true')return (await getPool().query("SELECT id,name FROM org_schools WHERE status='active' ORDER BY name,id")).rows; const r=await getPool().query("SELECT DISTINCT profile_school FROM auth_users WHERE role='admin' AND status='active' AND profile_school<>'' ORDER BY profile_school"); return r.rows.map((row,index)=>({id:String(index),name:normalizeSchoolName(row.profile_school)})); };

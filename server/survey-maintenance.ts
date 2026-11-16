@@ -9,6 +9,6 @@ export async function maintenanceHandler(req: any, res: any) {
     const expected = Buffer.from(secret), actual = Buffer.from(supplied);
     if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected))
         return res.status(401).json({ ok: false });
-    await expireDrafts();
-    return res.json({ ok: true });
+    const result=await expireDrafts();
+    return res.json({ ok: true,...result });
 }

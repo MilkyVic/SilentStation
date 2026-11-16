@@ -1,3 +1,4 @@
+import {ui,useLocale} from '../../features/preferences/ui';
 import React, { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { AlertCircle, Battery, Check, LogIn, Zap } from 'lucide-react';
@@ -24,7 +25,7 @@ export default function MentalBatteryCheck({
   userRole,
   onNavigateToTestList,
   onNavigateToAuth,
-}: MentalBatteryCheckProps) {
+}: MentalBatteryCheckProps) {useLocale();
   const [selectedItems, setSelectedItems] = useState<number[]>([]);
 
   const selectedCount = selectedItems.length;
@@ -59,12 +60,10 @@ export default function MentalBatteryCheck({
         <div>
           <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-[10px] font-black uppercase tracking-[0.2em] text-brand-primary shadow-sm">
             <Battery size={14} />
-            Mini-test Pin tinh thần
-          </div>
-          <h3 className="text-2xl font-black text-brand-primary">Hôm nay pin cảm xúc của bạn đang ở mức nào?</h3>
+            {ui("Mini-test Pin tinh thần")}</div>
+          <h3 className="text-2xl font-black text-brand-primary">{ui("Hôm nay pin cảm xúc của bạn đang ở mức nào?")}</h3>
           <p className="mt-3 max-w-2xl text-sm font-medium leading-relaxed text-gray-500">
-            Tick những dấu hiệu bạn đang gặp. Đây chỉ là kiểm tra định hướng nhanh, không thay thế bài test chính thức.
-          </p>
+            {ui("Tick những dấu hiệu bạn đang gặp. Đây chỉ là kiểm tra định hướng nhanh, không thay thế bài test chính thức.")}</p>
         </div>
 
         <div className="min-w-[150px] rounded-3xl bg-white p-5 text-center shadow-sm">
@@ -128,10 +127,9 @@ export default function MentalBatteryCheck({
                   <AlertCircle size={20} />
                 </div>
                 <div>
-                  <p className="font-black text-brand-primary">Pin đang báo hiệu bạn nên kiểm tra kỹ hơn.</p>
+                  <p className="font-black text-brand-primary">{ui("Pin đang báo hiệu bạn nên kiểm tra kỹ hơn.")}</p>
                   <p className="mt-1 text-sm font-medium leading-relaxed text-gray-500">
-                    Nếu tình trạng này lặp lại nhiều ngày, hãy thử làm một bài test tâm lý hoặc nhắn với Chat Box bé Trạm.
-                  </p>
+                    {ui("Nếu tình trạng này lặp lại nhiều ngày, hãy thử làm một bài test tâm lý hoặc nhắn với Chat Box bé Trạm.")}</p>
                 </div>
               </div>
               <button
@@ -139,7 +137,7 @@ export default function MentalBatteryCheck({
                 onClick={handleCta}
                 className="inline-flex items-center justify-center gap-2 rounded-2xl bg-brand-primary px-5 py-3 text-xs font-black uppercase tracking-widest text-white shadow-lg shadow-brand-primary/20 transition-transform hover:-translate-y-0.5"
               >
-                {canGoToTests ? 'Đến Trạm giải mã' : 'Đăng nhập để làm test'}
+                {canGoToTests ? ui("Đến Trạm giải mã") : ui("Đăng nhập để làm test")}
                 {!canGoToTests && <LogIn size={15} />}
               </button>
             </div>

@@ -20,3 +20,22 @@ test('legacy SDQ reversals, MT mean and MBI subscales are arithmetic only', () =
 test('template questions require real options and integer score values', () => { assert.throws(() => validateQuestionList([{ text: '?', options: [{ text: 'only', score: 1 }] }])); assert.throws(() => validateQuestionList([{ text: '?', options: [{ text: 'a', score: 1.1 }, { text: 'b', score: 2 }] }])); assert.equal(validateQuestionList([{ text: '?', options: [{ text: 'a', score: 0 }, { text: 'b', score: 1 }] }]).length, 1); });
 import { encryptDraft, decryptDraft } from './draft-crypto.js';
 test('draft ciphertext cannot be decrypted with another token/campaign/session', () => { const encrypted = encryptDraft({ 'J.1': { status: 'answered', value: 'fictional-note' } }, 'token-a', 'campaign-a', 'session-a'); assert.ok(!JSON.stringify(encrypted).includes('fictional-note')); assert.deepEqual(decryptDraft(encrypted, 'token-a', 'campaign-a', 'session-a'), { 'J.1': { status: 'answered', value: 'fictional-note' } }); assert.throws(() => decryptDraft(encrypted, 'token-b', 'campaign-a', 'session-a')); assert.throws(() => decryptDraft(encrypted, 'token-a', 'campaign-b', 'session-a')); assert.throws(() => decryptDraft(encrypted, 'token-a', 'campaign-a', 'session-b')); });
+
+import {getSurveyRelease,getSurveyDefinition} from '../../shared/surveys/releases.js';
+import {DEFINITION_VERSION,CONSENT_VERSION} from '../../shared/surveys/contracts.js';
+import {APP_RELEASE} from '../../shared/release.js';
+import React from 'react';
+import {renderToStaticMarkup} from 'react-dom/server';
+import SurveyPrint from '../../src/features/survey/SurveyPrint.js';
+test('official v1 software release preserves the immutable historical question content',()=>{
+ assert.equal(APP_RELEASE.version,'1.1.0');assert.equal(DEFINITION_VERSION,'student-mental-health-v1');assert.equal(CONSENT_VERSION,'survey-consent-v1');
+ assert.equal(getSurveyRelease(DEFINITION_VERSION)?.channel,'official');const old=getSurveyDefinition('student-mental-health-v1-draft')!;
+ assert.equal(getSurveyRelease(old.version)?.channel,'historical');assert.deepEqual(old.questions,DEFINITION.questions);assert.deepEqual(old.sections,DEFINITION.sections);assert.equal(old.consentVersion,'survey-consent-v1-draft');
+ assert.equal(getSurveyDefinition('unknown-version'),undefined);assert.equal(getSurveyDefinition('__proto__'),undefined);
+});
+test('printing uses the recorded version and never substitutes an unsupported one',()=>{
+ const fresh=renderToStaticMarkup(React.createElement(SurveyPrint));assert.ok(fresh.includes('Phiên bản chính thức 1.0'));assert.ok(!fresh.includes('Phiên bản dự thảo'));
+ const record:any={responseId:'fixture',savedAt:'2026-11-15T00:00:00Z',campaignId:'fixture',definitionVersion:'student-mental-health-v1-draft',scoreVersion:'survey-arithmetic-v1',consentVersion:'survey-consent-v1-draft',answers:{},reviewedSections:[],scores:{}};
+ const historical=renderToStaticMarkup(React.createElement(SurveyPrint,{record}));assert.ok(historical.includes('student-mental-health-v1-draft'));assert.ok(historical.includes('B25.'));assert.ok(historical.includes('J4.'));
+ const unsupported=renderToStaticMarkup(React.createElement(SurveyPrint,{record:{...record,definitionVersion:'unknown-version'}}));assert.ok(unsupported.includes('Không hỗ trợ in phiên bản này'));assert.ok(!unsupported.includes('B25.'));
+});

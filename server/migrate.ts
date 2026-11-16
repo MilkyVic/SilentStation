@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { database, closeDatabase } from './database.js';
 import type { PoolClient } from 'pg';
-export const MIGRATION_FILES = ['001_auth_schema.sql', '002_test_schema.sql', '003_survey_schema.sql', '004_legacy_versions.sql', '005_runtime_hardening.sql'];
+export const MIGRATION_FILES = ['001_auth_schema.sql', '002_test_schema.sql', '003_survey_schema.sql', '004_legacy_versions.sql', '005_runtime_hardening.sql','006_legacy_draft_identity.sql','007_account_management.sql','008_survey_invitations_preferences.sql'];
 export type Migration = { name: string; sql: string; checksum: string };
 export async function migrationDefinitions(): Promise<Migration[]> {
     return Promise.all(MIGRATION_FILES.map(async name => { const sql = (await fs.readFile(path.resolve('server/sql', name), 'utf8')).replace(/^\uFEFF/, ''); return { name, sql, checksum: crypto.createHash('sha256').update(sql).digest('hex') }; }));

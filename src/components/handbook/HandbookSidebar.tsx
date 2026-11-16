@@ -1,3 +1,4 @@
+import {ui,useLocale} from '../../features/preferences/ui';
 import React from 'react';
 import { motion } from 'motion/react';
 import { Search } from 'lucide-react';
@@ -30,7 +31,7 @@ export default function HandbookSidebar({
   activeSectionId,
   onSelectSection,
   iconMap,
-}: HandbookSidebarProps) {
+}: HandbookSidebarProps) {useLocale();
   return (
     <motion.aside
       aria-hidden={!isSidebarOpen} inert={!isSidebarOpen}
@@ -46,7 +47,7 @@ export default function HandbookSidebar({
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-brand-primary/40" size={18} />
           <input
             type="text"
-            placeholder="Tìm kiến thức..."
+            placeholder={ui("Tìm kiến thức...")}
             className="w-full pl-12 pr-4 py-3 bg-gray-50 border-none rounded-2xl text-sm focus:ring-2 focus:ring-brand-primary/10 outline-none"
             value={searchQuery}
             onChange={(e) => onSearchQueryChange(e.target.value)}

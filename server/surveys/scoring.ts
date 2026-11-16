@@ -1,10 +1,10 @@
-import { DEFINITION, type Answers, type Scores, validateAnswers } from '../../shared/surveys/contracts.js';
+import { DEFINITION, type Answers, type Scores, type Definition, validateAnswers } from '../../shared/surveys/contracts.js';
 import { calculateSDQScore, calculatePHQAScore, calculateGAD7Score, calculateSBQRScore, calculateKnowledgeScore, calculateAttitudeScore, calculateLifestyleScore } from './reference-scoring.js';
-// Only arithmetic is exposed. Draft instrument classifications are NOT promoted to clinical advice.
-export function scoreSurvey(input: Answers, approved = false): Scores {
-    const answers = validateAnswers(input), scores: Scores = {};
+// Only approved arithmetic is exposed. Software release status never grants clinical interpretation.
+export function scoreSurvey(input: Answers, approved = false, definition: Definition = DEFINITION): Scores {
+    const answers = validateAnswers(input,definition), scores: Scores = {};
     for (const section of ['B', 'C', 'D', 'E', 'F', 'G', 'H']) {
-        const qs = DEFINITION.questions.filter(q => q.section === section);
+        const qs = definition.questions.filter(q => q.section === section);
         const missing = qs.filter(q => answers[q.code].status !== 'answered').length;
         if (missing) {
             scores[section] = { status: 'insufficient_data', missing };

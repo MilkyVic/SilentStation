@@ -1,7 +1,7 @@
 import { SDQ_QUESTIONS, PHQA_QUESTIONS, GAD7_QUESTIONS, SBQR_QUESTIONS, LIFESTYLE_QUESTIONS, KNOWLEDGE_QUESTIONS, ATTITUDE_QUESTIONS, SELF_CARE_SKILLS } from './question-bank.js';
-export const DEFINITION_VERSION = 'student-mental-health-v1-draft';
+export const DEFINITION_VERSION = 'student-mental-health-v1';
 export const SCORE_VERSION = 'survey-arithmetic-v1';
-export const CONSENT_VERSION = 'survey-consent-v1-draft';
+export const CONSENT_VERSION = 'survey-consent-v1';
 export const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 export type SectionId = 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G' | 'H' | 'I' | 'J';
 export type Answer = {
@@ -33,6 +33,8 @@ export type Score = {
 };
 export type Scores = Record<string, Score>;
 export type Campaign = {
+    teacherDistributionEnabled?: boolean;
+    schoolId?:string|null;
     id: string;
     code: string;
     title: string;
@@ -44,6 +46,7 @@ export type Campaign = {
     scoringApproved: boolean;
     policyApproved: boolean;
     retentionDays: number | null;
+    approvalReference?: string;
     permissions?: {
         readRaw: boolean;
         export: boolean;
@@ -125,15 +128,15 @@ export const DEFINITION: Definition = { version: DEFINITION_VERSION, consentVers
         { id: 'I', title: 'Tự chăm sóc và tìm kiếm sự trợ giúp', instruction: 'K có nghĩa là em chưa rõ khả năng của mình; đây là một lựa chọn hợp lệ.' },
         { id: 'J', title: 'Rào cản và nhu cầu hỗ trợ', instruction: 'Các câu tự luận không bắt buộc. Không ghi chi tiết có thể nhận diện em hoặc người khác.' }
     ], questions };
-export const emptyAnswers = (): Answers => Object.fromEntries(questions.map(q => [q.code, { status: 'unanswered' }]));
-export const countAnswers = (answers: Answers) => ({ answered: Object.values(answers).filter(a => a.status === 'answered').length, skipped: Object.values(answers).filter(a => a.status === 'skipped').length, unanswered: questions.length - Object.keys(answers).filter(k => answers[k].status !== 'unanswered').length });
+export const emptyAnswers = (definition: Definition = DEFINITION): Answers => Object.fromEntries(definition.questions.map(q => [q.code, { status: 'unanswered' }]));
+export const countAnswers = (answers: Answers, definition: Definition = DEFINITION) => ({ answered: Object.values(answers).filter(a => a.status === 'answered').length, skipped: Object.values(answers).filter(a => a.status === 'skipped').length, unanswered: definition.questions.length - Object.keys(answers).filter(k => answers[k].status !== 'unanswered').length });
 export class SurveyValidationError extends Error {
 }
-export function validateAnswers(input: unknown): Answers {
+export function validateAnswers(input: unknown, definition: Definition = DEFINITION): Answers {
     if (!input || typeof input !== 'object' || Array.isArray(input))
         throw new SurveyValidationError('Dữ liệu câu trả lời không hợp lệ.');
-    const result = emptyAnswers();
-    const byCode = new Map(questions.map(q => [q.code, q]));
+    const result = emptyAnswers(definition);
+    const byCode = new Map(definition.questions.map(q => [q.code, q]));
     for (const [code, raw] of Object.entries(input)) {
         const q = byCode.get(code);
         if (!q || !raw || typeof raw !== 'object' || Array.isArray(raw))
@@ -158,5 +161,5 @@ export function validateAnswers(input: unknown): Answers {
     }
     return result;
 }
-export function validateSections(input: unknown): SectionId[] { if (!Array.isArray(input) || input.some(v => !DEFINITION.sections.some(s => s.id === v)))
+export function validateSections(input: unknown, definition: Definition = DEFINITION): SectionId[] { if (!Array.isArray(input) || input.some(v => !definition.sections.some(s => s.id === v)))
     throw new SurveyValidationError('Phần khảo sát không hợp lệ.'); return [...new Set(input)] as SectionId[]; }

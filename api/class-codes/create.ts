@@ -1,7 +1,9 @@
+import {accountsEnabled,accountHandler} from '../../server/accounts/http.js';
 import { createClassJoinCode } from '../../server/auth-core.js';
 import { ensureMethod, getBearerToken, handleApiError, readJsonBody } from '../_lib/handler.js';
 
 export default async function handler(req: any, res: any) {
+ if(accountsEnabled())return accountHandler(req,res,'codeCreate');
   if (!ensureMethod(req, res, ['POST'])) return;
 
   try {

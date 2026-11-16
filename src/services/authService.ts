@@ -192,8 +192,9 @@ const mapApiUserToAccount = (user: AuthApiUser, password = ''): AuthAccount => {
     username: normalizeUsername(user.username),
     password,
     role,
-    status: mapApiStatusToAuthStatus(user.status),
+    status: mapApiStatusToAuthStatus(user.status),revision:user.revision??0,
     profile: {
+      schoolId:user.profile.schoolId,classId:user.profile.classId,bio:user.profile.bio,avatarKey:user.profile.avatarKey,emailVerified:user.profile.emailVerified,revision:user.revision,
       name: user.profile.name || user.username,
       email: user.profile.email || `${user.username}@tram-an.vn`,
       birthYear: user.profile.birthYear || '',
@@ -351,7 +352,7 @@ const callApi = async (url: string, init?: RequestInit): Promise<unknown | null>
   try {
     const response = await fetch(url, {
       ...init,
-      credentials: 'include',
+      credentials: 'include',signal:init?.signal??AbortSignal.timeout(20000),
       headers: {
         'Content-Type': 'application/json',
         ...(init?.headers || {}),
@@ -661,19 +662,12 @@ export const authService = {
   },
 
   async logout(): Promise<void> {
-    const token = getStoredToken();
+    if(isBrowser()){
+      const response=await callAuthApi('/logout',{method:'POST'});
+      if(!response?.ok)throw new Error('Không xác nhận đăng xuất trên backend. Vui lòng thử lại; không dùng máy chung khi phiên chưa kết thúc.');
+    }
+    setStoredToken(null);currentSession=null;pendingAdminLoginOtp=null;
 
-    setStoredToken(null);
-    currentSession = null;
-    pendingAdminLoginOtp = null;
-
-    if (!isBrowser()) return;
-
-    await callAuthApi('/logout', {
-      method: 'POST',
-      headers: {
-      },
-    });
   },
 
   async getCurrentSession(): Promise<AuthAccount | null> {

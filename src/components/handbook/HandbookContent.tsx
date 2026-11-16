@@ -1,3 +1,4 @@
+import {ui,useLocale} from '../../features/preferences/ui';
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { ArrowRight, ChevronRight, Menu, X } from 'lucide-react';
 import HandbookMarkdown from './HandbookMarkdown';
@@ -57,7 +58,7 @@ export default function HandbookContent({
   userRole,
   onNavigateToTestList,
   onNavigateToAuth,
-}: HandbookContentProps) {
+}: HandbookContentProps) {useLocale();
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const throttleRef = useRef<number | null>(null);
 
@@ -134,8 +135,8 @@ export default function HandbookContent({
         <div className="max-w-3xl mx-auto space-y-20">
           {sections.length === 0 ? (
             <div className="rounded-[2rem] border border-dashed border-gray-200 bg-gray-50 p-10 text-center">
-              <p className="text-sm font-black uppercase tracking-widest text-gray-400">Không tìm thấy nội dung phù hợp</p>
-              <p className="mt-3 text-gray-500">Thử đổi từ khóa tìm kiếm hoặc chọn một chủ đề khác trong cẩm nang.</p>
+              <p className="text-sm font-black uppercase tracking-widest text-gray-400">{ui("Không tìm thấy nội dung phù hợp")}</p>
+              <p className="mt-3 text-gray-500">{ui("Thử đổi từ khóa tìm kiếm hoặc chọn một chủ đề khác trong cẩm nang.")}</p>
             </div>
           ) : (
             sections.map((section) => (
