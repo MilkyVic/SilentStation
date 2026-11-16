@@ -1,8 +1,12 @@
 {
+  "git": {
+    "deploymentEnabled": false
+  },
   "functions": {
     "api/**/*.ts": {
       "maxDuration": 30,
-      "includeFiles": "{chatbot-knowledge,server/sql}/**"
+      "includeFiles": "{chatbot-knowledge,server/sql}/**",
+      "excludeFiles": "{{public,tram-an-fe,src,tests,docs,dist*,scripts,workers,artifacts,.*}/**,server/{test-fixtures,loadtest,deployment}/**,server/{seed-demo,test-question-bank,accounts/mapping}.ts,**/{*.test.ts,.env*,.gitignore,.keep},vite.config.ts,README.md,*.docx}"
     }
   }
 }

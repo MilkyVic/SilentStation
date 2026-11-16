@@ -4,6 +4,7 @@ import {AuthHttpError} from './auth-core.js';
 import type {LegacyAnswers,LegacyQuestion,LegacyReceipt} from '../shared/legacy-tests.js';
 type Db=Pool|PoolClient;
 export function assertTestAccess(user:any,row:any,active=true){
+ if(row?.is_qa&&!user.isQa)throw new AuthHttpError(403,'TEST_QA_ONLY','Bài kiểm thử chỉ dành cho tài khoản QA.');
  if(!row||row.archived_at||active&&!row.is_active)throw new AuthHttpError(409,'TEST_CLOSED','Bài test đã đóng hoặc không còn khả dụng.');
  if(!['admin','superadmin'].includes(user.role)&&row.target_audience!=='both'&&row.target_audience!==user.role)throw new AuthHttpError(403,'AUTH_INVALID_ROLE','Không có quyền với bài test.');
 }

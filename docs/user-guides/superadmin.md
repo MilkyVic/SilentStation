@@ -49,3 +49,6 @@
 - Conflict/mất ACK: giữ request cũ, retry/đối chiếu, không tạo thao tác thay thế có thể trùng.
 - Gate fail: giữ evidence/volume để điều tra; không reset/down-migrate, reseed hoặc prune stack khác.
 - GitHub, credential, production migration/deployment, bật thu dữ liệu thật và cleanup tài nguyên cần ủy quyền riêng. Không có chức năng UI thay thế các ủy quyền này.
+
+## Bootstrap khi niên khóa chưa được xác nhận
+Có thể chuẩn hóa tên trường và gán tài khoản vào trường trước, để class ID trống. Luồng bootstrap phải có cờ explicit deferClassAssignment; không tạo lớp với niên khóa giả. GVCN chưa có class ID không được cấp quyền danh sách/mã lớp; các trường/lớp và niên khóa được quản trị xác nhận sau. Giữ trạng thái pending, mật khẩu và kết quả lịch sử.

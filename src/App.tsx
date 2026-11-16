@@ -62,7 +62,7 @@ function AppShell() {useLocale();
  <Route path="/bai-danh-gia" element={<section className="legacy-wrapper">{legacy('test-list')}</section>}/>
  <Route path="/tai-khoan/settings" element={<section className="legacy-wrapper">{legacy('settings')}</section>}/><Route path="/tai-khoan" element={<section className="legacy-wrapper">{legacy('account')}</section>}/>
  <Route path="/nghien-cuu" element={account ? <SurveyAdminPage key={account.id} account={account}/> : <Gate />}/>
- <Route path="/quan-tri" element={management ? <section className="legacy-wrapper">{legacy(account.role === 'Quản trị viên cấp cao' ? ui("superadmin") : ui("admin"))}</section> : account?.role === 'Giáo viên' ? <section className="legacy-wrapper">{legacy(account.profile.teacherType === 'homeroom' && account.profile.className ? ui("teacher-class") : ui("test-list"))}</section> : <Gate />}/>
+ <Route path="/quan-tri" element={management ? <section className="legacy-wrapper">{legacy(account.role === 'Quản trị viên cấp cao' ? 'superadmin' : 'admin')}</section> : account?.role === 'Giáo viên' ? <section className="legacy-wrapper">{legacy('teacher-class')}</section> : <Gate />}/>
  <Route path="/quan-tri/:view" element={<ManagementRoute account={account} render={legacy}/>}/>
  <Route path="*" element={<div className="page-wrap"><section className="surface-card"><h1>{ui("Không tìm thấy trang")}</h1><Link to="/">{ui("Về trang chủ")}</Link></section></div>}/>
  </Routes></Suspense></main>

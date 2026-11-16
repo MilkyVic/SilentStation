@@ -1,3 +1,4 @@
+import {includeQa} from './qa-policy.js';
 import {snapshotOverview} from './accounts/reports.js';
 import {TEST_ICONS,TEST_COLORS} from '../shared/accounts.js';
 import crypto from 'node:crypto';
@@ -44,7 +45,7 @@ const mapTemplateRow = (row: Record<string, any>) => ({
   description: row.description,
   targetAudience: row.target_audience,
   templateCode: row.template_code,
-  isSystem: row.is_system,
+  isSystem: row.is_system,isQa:!!row.is_qa,
   isActive: row.is_active,
   displayOrder: row.display_order,durationMinutes:row.duration_minutes,iconKey:row.icon_key,colorKey:row.color_key,
   questionCount: Number(row.question_count || 0),
@@ -144,7 +145,7 @@ export const listTestCatalog = async (token: string | null) => {
       t.description,
       t.target_audience,
       t.template_code,
-      t.is_system,
+      t.is_system,t.is_qa,t.duration_minutes,t.icon_key,t.color_key,
       t.is_active,
       t.display_order,
       t.created_at,
@@ -157,9 +158,9 @@ export const listTestCatalog = async (token: string | null) => {
       GROUP BY template_id
     ) q ON q.template_id = t.id
     WHERE t.archived_at IS NULL AND t.is_active = TRUE
-      AND t.target_audience = ANY($1::text[])
+      AND t.target_audience = ANY($1::text[]) AND (NOT t.is_qa OR $2::boolean)
     ORDER BY t.display_order ASC, t.created_at ASC
-  `, [audiences]);
+  `, [audiences,!!user.isQa]);
 
   return {
     userRole: role,
@@ -181,7 +182,7 @@ export const listManageTestTemplates = async (token: string | null) => {
       t.description,
       t.target_audience,
       t.template_code,
-      t.is_system,
+      t.is_system,t.is_qa,t.duration_minutes,t.icon_key,t.color_key,
       t.is_active,
       t.display_order,
       t.created_by_user_id,
@@ -264,7 +265,7 @@ export const listTemplateVersions = async (token: string | null, templateId: str
   return {
     templateId: id,
     versions: versions.rows.map((row) => ({
-      id: row.id,
+      id: row.id,isQa:!!row.is_qa,
       templateId: row.template_id,
       versionNumber: row.version_number,
       action: row.action,
@@ -303,7 +304,7 @@ export const submitTestResult=async(token:string|null,payload:unknown)=>{
   if(def.questionList.some(q=>stored[q.id]!==selected[q.id]))throw new AuthHttpError(409,'TEST_DRAFT_CONFLICT','Đáp án cuối chưa được lưu.');
   const context=(await client.query('SELECT s.id AS school_id,s.name AS school,c.id AS class_id,c.name AS class_name,c.academic_year FROM auth_users u JOIN org_schools s ON s.id=u.school_id LEFT JOIN org_classes c ON c.id=u.class_id WHERE u.id=$1',[user.id])).rows[0];
   const scores=def.questionList.map(q=>q.options.find(o=>o.id===stored[q.id])!.score!),scoreData=scoreByTemplate(id,row.template_code,scores),attemptId=`ta-${crypto.randomUUID()}`;
-  await client.query('INSERT INTO test_attempts(id,user_id,template_id,user_role,score_total,score_level,score_payload,answers,suggest_dass21,score_version,template_snapshot,draft_id,definition_digest,answer_options) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11::jsonb,$12,$13,$14::jsonb)',[attemptId,user.id,id,user.role,scoreData.scoreTotal,scoreData.scoreLevel,JSON.stringify(scoreData.scorePayload),JSON.stringify(scores),scoreData.suggestDass21,LEGACY_SCORE_VERSION,JSON.stringify(def.snapshot),draftId,digest,JSON.stringify(stored)]);
+  await client.query('INSERT INTO test_attempts(id,user_id,template_id,user_role,score_total,score_level,score_payload,answers,suggest_dass21,score_version,template_snapshot,draft_id,definition_digest,answer_options,is_qa) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11::jsonb,$12,$13,$14::jsonb,$15)',[attemptId,user.id,id,user.role,scoreData.scoreTotal,scoreData.scoreLevel,JSON.stringify(scoreData.scorePayload),JSON.stringify(scores),scoreData.suggestDass21,LEGACY_SCORE_VERSION,JSON.stringify(def.snapshot),draftId,digest,JSON.stringify(stored),!!user.isQa||!!row.is_qa]);
   if(context)await client.query("UPDATE test_attempts SET context_status='snapshot',context_school_id=$2,context_class_id=$3,context_snapshot=$4::jsonb WHERE id=$1",[attemptId,context.school_id,context.class_id,JSON.stringify({school:context.school,className:context.class_name??'',academicYear:context.academic_year??''})]);
   await client.query("UPDATE legacy_test_drafts SET submitted_at=NOW(),answers='{}'::jsonb WHERE user_id=$1 AND template_id=$2",[user.id,id]);await client.query('COMMIT');return {attemptId,...scoreData};
  }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
@@ -322,7 +323,7 @@ export const listMyTestResults = async (token: string | null) => {
       ta.score_level,
       ta.score_payload,
       ta.suggest_dass21,
-      ta.submitted_at,ta.context_status,ta.context_snapshot,ta.score_version
+      ta.submitted_at,ta.context_status,ta.context_snapshot,ta.score_version,ta.is_qa
     FROM test_attempts ta
     JOIN test_templates tt ON tt.id = ta.template_id
     WHERE ta.user_id = $1
@@ -333,7 +334,7 @@ export const listMyTestResults = async (token: string | null) => {
   return {
     userId: user.id,
     results: result.rows.map((row) => ({
-      id: row.id,
+      id: row.id,isQa:!!row.is_qa,
       templateId: row.template_id,contextStatus:row.context_status,contextSnapshot:row.context_snapshot,scoreVersion:row.score_version,
       templateTitle: row.template_title,
       scoreTotal: Number(row.score_total),
@@ -366,6 +367,7 @@ export const getTestOpsSummary = async (token: string | null, query: unknown) =>
     where.push(`ta.context_status='snapshot' AND ta.context_school_id = $${params.length}`);
   }
 
+  try { if(!includeQa(rawQuery.includeQa))where.push('NOT ta.is_qa'); } catch { throw new AuthHttpError(400,'TEST_INVALID','Bộ lọc QA không hợp lệ.'); }
   const baseWhere = where.join(' AND ');
   const totalResult = await getPool().query(`
     SELECT
@@ -420,7 +422,7 @@ export const getTestOpsSummary = async (token: string | null, query: unknown) =>
 export const createCustomTestTemplate = async(token:string|null,payload:unknown)=>{
  await initializeTestCore();const user=await getCurrentUser(token);if(!['admin','superadmin'].includes(user.role))throw new AuthHttpError(403,'AUTH_INVALID_ROLE','Không có quyền quản trị bài test.');
  const b=(payload&&typeof payload==='object'?payload:{}) as Record<string,unknown>;const title=String(b.title||'').trim();if(!title)throw new AuthHttpError(400,'TEST_INVALID','Thiếu tiêu đề.');const qs=validateQuestionList(b.questionList??[]);const audience=['student','teacher','both'].includes(String(b.targetAudience))?String(b.targetAudience):'both';
- const client=await getPool().connect();try{await client.query('BEGIN');const id=`ct-${crypto.randomUUID()}`;const r=await client.query("INSERT INTO test_templates(id,title,description,target_audience,template_code,is_system,is_active,display_order,created_by_user_id) VALUES($1,$2,$3,$4,'CUSTOM',FALSE,FALSE,1000,$5) RETURNING *",[id,title,String(b.description||''),audience,user.id]);await replaceQuestions(client,id,qs);if(b.durationMinutes!==undefined||b.iconKey!==undefined||b.colorKey!==undefined){const minutes=b.durationMinutes??null,icon=b.iconKey??'Zap',color=b.colorKey??'primary';if(minutes!==null&&(typeof minutes!=='number'||!Number.isInteger(minutes)||minutes<1||minutes>240)||!TEST_ICONS.includes(icon as any)||!TEST_COLORS.includes(color as any))throw new AuthHttpError(400,'TEST_INVALID','Metadata không hợp lệ.');await client.query('UPDATE test_templates SET duration_minutes=$2,icon_key=$3,color_key=$4 WHERE id=$1',[id,minutes,icon,color]);Object.assign(r.rows[0],{duration_minutes:minutes,icon_key:icon,color_key:color});}await appendVersion(client,r.rows[0],'create',user.id);await client.query('COMMIT');return {template:{...mapTemplateRow(r.rows[0]),questionCount:qs.length,currentVersion:1}};}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
+ const client=await getPool().connect();try{await client.query('BEGIN');const id=`ct-${crypto.randomUUID()}`;const r=await client.query("INSERT INTO test_templates(id,title,description,target_audience,template_code,is_system,is_active,display_order,created_by_user_id,is_qa) VALUES($1,$2,$3,$4,'CUSTOM',FALSE,FALSE,1000,$5,$6) RETURNING *",[id,title,String(b.description||''),audience,user.id,!!user.isQa]);await replaceQuestions(client,id,qs);if(b.durationMinutes!==undefined||b.iconKey!==undefined||b.colorKey!==undefined){const minutes=b.durationMinutes??null,icon=b.iconKey??'Zap',color=b.colorKey??'primary';if(minutes!==null&&(typeof minutes!=='number'||!Number.isInteger(minutes)||minutes<1||minutes>240)||!TEST_ICONS.includes(icon as any)||!TEST_COLORS.includes(color as any))throw new AuthHttpError(400,'TEST_INVALID','Metadata không hợp lệ.');await client.query('UPDATE test_templates SET duration_minutes=$2,icon_key=$3,color_key=$4 WHERE id=$1',[id,minutes,icon,color]);Object.assign(r.rows[0],{duration_minutes:minutes,icon_key:icon,color_key:color});}await appendVersion(client,r.rows[0],'create',user.id);await client.query('COMMIT');return {template:{...mapTemplateRow(r.rows[0]),questionCount:qs.length,currentVersion:1}};}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
 };
 export const updateCustomTestTemplate=async(token:string|null,id:string,payload:unknown)=>{
  await initializeTestCore();const user=await getCurrentUser(token),b=(payload&&typeof payload==='object'?payload:{}) as any,qs=b.questionList===undefined?undefined:validateQuestionList(b.questionList);

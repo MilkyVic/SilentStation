@@ -54,3 +54,6 @@ Mã đăng ký lớp vẫn thuộc GVCN. Admin không tạo mã lớp chỉ vì 
 - Lỗi mạng sau gửi: retry cùng request ID. Không tạo success từ đóng modal hay state local.
 - Đợt chưa vượt gate: kiểm tra trạng thái, cấu hình TEST/chính thức và hồ sơ; không yêu cầu bật flag production từ nút UI.
 - QR localhost không dùng được từ điện thoại khác. LAN HTTP chỉ là nghiệm thu dữ liệu giả, không phải bằng chứng TLS/production.
+
+## Hoàn tất phân lớp/niên khóa sau khi đưa tài khoản vào sử dụng
+Tài khoản mới có thể chỉ được gán trường, chưa có lớp/niên khóa. Trong **Lớp/niên khóa — Class / academic year**, tạo lớp bằng niên khóa đã đối chiếu rồi phân công học sinh/GVCN. Không điền năm giả hoặc dùng ngày hiện tại để suy niên khóa. Giáo viên pending vẫn chờ duyệt, chưa có quyền GVCN. Dữ liệu lịch sử không được tự gán ngược vào lớp mới.

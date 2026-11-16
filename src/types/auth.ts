@@ -9,6 +9,8 @@ export type AuthAccount = {
   role: AuthRole;
   status: AuthStatus;
   revision?:number;
+  isQa?:boolean;
+  qaAccessExpiresAt?:string|null;
   profile: {
     schoolId?:string|null;classId?:string|null;bio?:string;avatarKey?:string;emailVerified?:boolean;revision?:number;
     name: string;
@@ -24,6 +26,7 @@ export type AuthAccount = {
 };
 
 export type AuthErrorCode =
+  | 'AUTH_QA_EXPIRED'
   | 'AUTH_USERNAME_EXISTS'
   | 'AUTH_INVALID_CREDENTIALS'
   | 'AUTH_PENDING_APPROVAL'
@@ -81,6 +84,8 @@ export type AuthApiUser = {
   role: ApiRole;
   status: ApiStatus;
   revision?:number;
+  isQa?:boolean;
+  qaAccessExpiresAt?:string|null;
   profile: {
     schoolId?:string|null;classId?:string|null;bio?:string;avatarKey?:string;emailVerified?:boolean;revision?:number;
     name: string;

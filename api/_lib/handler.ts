@@ -1,8 +1,9 @@
+import {configuredCorsOrigin} from '../../server/runtime-config.js';
 import {requestToken,stateChangeCsrf,sameOrigin} from '../../server/http-security.js';
 import { RateLimitError } from '../../server/rate-limits.js';
 import { AuthHttpError } from '../../server/auth-core.js';
 
-export const CORS_ORIGIN = process.env.AUTH_API_CORS_ORIGIN || '*';
+export const CORS_ORIGIN = configuredCorsOrigin();
 
 export const applyCors = (res: any) => {
   res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('Cache-Control','no-store');

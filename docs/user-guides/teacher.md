@@ -55,3 +55,6 @@ Giáo viên bộ môn không được quyền GVCN chỉ vì có quyền phát m
 - Mất mạng khi tạo/thu hồi: retry cùng request, không nhấn tạo nhiều mã để thay một lần gửi chưa rõ kết quả.
 - Conflict: tải lại danh sách trước khi thao tác. Mã đã thu hồi/hết hạn không phục hồi được.
 - Hủy/Đóng không lưu thay đổi. Email/chat chưa cấu hình phải hiện chưa khả dụng, không coi là gửi thành công.
+
+## Niên khóa được thiết lập sau
+Giáo viên có trường hợp lệ vẫn đăng nhập, dùng hồ sơ/bài tự đánh giá và phát mã khảo sát theo quyền của đợt. Khi chưa có lớp/niên khóa được xác nhận, nhãn GVCN trong hồ sơ không tự cấp quyền đọc danh sách học sinh hoặc tạo mã lớp. Giáo viên cung cấp thông tin niên khóa/lớp để Admin xác nhận; việc tạo lớp và phân công chính thức vẫn theo ma trận quyền, không tự mở rộng quyền giáo viên.

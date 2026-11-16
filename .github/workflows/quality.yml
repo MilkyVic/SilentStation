@@ -1,0 +1,24 @@
+name: Node 22 quality
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      - run: npm run build:api
+      - run: npm run build:acceptance
+      - run: node scripts/check-bundle.mjs
+      - run: npm audit --audit-level=high
+# No cloud credentials, production migration or fixture initializer in CI.

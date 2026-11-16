@@ -131,6 +131,7 @@ type Question = {
 };
 
 type TestResult = {
+  isQa?:boolean;
   id: string;
   testId: string;
   testTitle: string;
@@ -2971,6 +2972,7 @@ const ReportsView = ({
   const [days, setDays] = useState(30);
   const [schoolFilter, setSchoolFilter] = useState('');
   const [classFilter, setClassFilter] = useState('');
+  const [includeQa,setIncludeQa]=useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
@@ -3033,7 +3035,7 @@ const ReportsView = ({
       setIsLoading(true);
       setErrorMessage('');
       const result = await testService.getReportsOverview({
-        days,
+        days,includeQa,
         school: schoolFilter || undefined,
         className: classFilter || undefined,
       });
@@ -3057,7 +3059,7 @@ const ReportsView = ({
     return () => {
       isUnmounted = true;
     };
-  }, [days, schoolFilter, classFilter, refreshToken]);
+  }, [days, schoolFilter, classFilter, includeQa, refreshToken]);
 
   const normalizeText = (value: unknown) => String(value || '')
     .normalize('NFD')
@@ -3274,6 +3276,7 @@ const ReportsView = ({
                 ))}
               </select>
             </div>
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={includeQa} onChange={e=>setIncludeQa(e.target.checked)}/>{ui('Bao gồm kết quả TEST/QA')}</label>
             <button
               onClick={() => setRefreshToken((prev) => prev + 1)}
               className="px-6 py-3 bg-brand-primary text-white rounded-xl text-xs font-black uppercase tracking-widest shadow-lg shadow-brand-primary/20"
@@ -4539,7 +4542,7 @@ const AdminView = ({
                       </div>
                       <div>
                         <p className="font-bold text-gray-800 text-sm">@{result.username}</p>
-                        <p className="text-[10px] text-gray-400 font-medium">{result.testTitle}</p>
+                        <p className="text-[10px] text-gray-400 font-medium">{result.testTitle}{result.isQa&&<strong> · TEST/QA</strong>}</p>
                         {result.scoreLevel && (
                           <p className="text-[10px] text-brand-primary font-bold mt-1">{result.scoreLevel}</p>
                         )}
@@ -5635,7 +5638,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
             setResultsError(message);
           } else {
             const mappedResults: TestResult[] = overviewResult.data.attempts.map((item) => ({
-              id: item.attemptId,
+              id: item.attemptId,isQa:!!item.isQa,
               testId: item.templateId,
               testTitle: item.templateTitle,
               userId: item.userId,
@@ -5665,7 +5668,7 @@ export default function LegacyApp({initialView='test-list',demoAccount,initialDa
           setResultsError(message);
         } else {
           const mappedResults: TestResult[] = myResults.data.results.map((item) => ({
-            id: item.id,
+            id: item.id,isQa:!!item.isQa,
             testId: item.templateId,
             testTitle: item.templateTitle,
             userId: userData.id,

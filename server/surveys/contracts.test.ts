@@ -28,7 +28,7 @@ import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import SurveyPrint from '../../src/features/survey/SurveyPrint.js';
 test('official v1 software release preserves the immutable historical question content',()=>{
- assert.equal(APP_RELEASE.version,'1.1.0');assert.equal(DEFINITION_VERSION,'student-mental-health-v1');assert.equal(CONSENT_VERSION,'survey-consent-v1');
+ assert.equal(APP_RELEASE.version,'1.1.1');assert.equal(DEFINITION_VERSION,'student-mental-health-v1');assert.equal(CONSENT_VERSION,'survey-consent-v1');
  assert.equal(getSurveyRelease(DEFINITION_VERSION)?.channel,'official');const old=getSurveyDefinition('student-mental-health-v1-draft')!;
  assert.equal(getSurveyRelease(old.version)?.channel,'historical');assert.deepEqual(old.questions,DEFINITION.questions);assert.deepEqual(old.sections,DEFINITION.sections);assert.equal(old.consentVersion,'survey-consent-v1-draft');
  assert.equal(getSurveyDefinition('unknown-version'),undefined);assert.equal(getSurveyDefinition('__proto__'),undefined);
