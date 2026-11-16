@@ -8,8 +8,8 @@ export async function seedOrganizationFixtures(c: PoolClient) { if ((await c.que
     await c.query("INSERT INTO org_classes(id,school_id,name,academic_year) VALUES($1,$2,'12A1','2026-2027')", [cls, id]);
     const users = (await c.query('SELECT * FROM auth_users WHERE profile_school=$1', [school])).rows;
     for (const u of users) {
-        const classroom = ['student', 'teacher'].includes(u.role) ? cls : null;
+        const classroom = ['student', 'teacher'].includes(u.role) && u.status==='active' ? cls : null;
         await c.query("UPDATE auth_users SET school_id=$2,class_id=$3,profile_class_name=CASE WHEN $3::text IS NULL THEN '' ELSE '12A1' END,email_verified_at=NOW() WHERE id=$1", [u.id, id, classroom]);
-        await c.query('INSERT INTO org_assignments(id,user_id,school_id,class_id,homeroom) VALUES($1,$2,$3,$4,$5)', [crypto.randomUUID(), u.id, id, classroom, u.role === 'teacher' && u.profile_teacher_type === 'homeroom']);
+        if(u.status==='active')await c.query('INSERT INTO org_assignments(id,user_id,school_id,class_id,homeroom) VALUES($1,$2,$3,$4,$5)', [crypto.randomUUID(), u.id, id, classroom, u.role === 'teacher' && u.profile_teacher_type === 'homeroom']);
     }
 } }

@@ -3,7 +3,7 @@
 from pathlib import Path
 import hashlib,json,tarfile,platform,subprocess
 root=Path(__file__).resolve().parent.parent
-roots=['src','server','api','shared','scripts','tests','workers','public','chatbot-knowledge','docs']
+roots=['.github/workflows','src','server','api','shared','scripts','tests','workers','public','chatbot-knowledge','docs']
 top=['package.json','package-lock.json','tsconfig.json','tsconfig.server.json','tsconfig.acceptance.json','vite.config.ts','index.html','vercel.json','README.md']
 paths=[]
 for folder in roots:
@@ -13,7 +13,7 @@ for folder in roots:
   if p.is_file() and not any(x in {'node_modules','.git','__pycache__','.acceptance','artifacts'} or x.startswith('.env') for x in rel.parts) and p.suffix not in {'.pyc','.pem','.key','.p12','.sqlite','.db','.docx','.pdf'}:paths.append(p)
 paths += [root/p for p in top]
 paths=sorted(set(paths),key=lambda p:str(p.relative_to(root)))
-manifest={'format':2,'target':'native-vercel-neon','files':{str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths},'realCollection':False,'schedulerEnabled':False,'runtime':{'nodeMajor':22,'platforms':['darwin','linux']},'cloudExecuted':False,'pendingGates':['Vercel Preview HTTPS/cookies','Neon development verification','Cloudflare authorized activation']}
+manifest={'format':2,'target':'native-vercel-neon','files':{str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths},'realCollection':False,'schedulerEnabled':False,'runtime':{'nodeMajor':22,'platforms':['darwin','linux']},'cloudExecuted':False,'pendingGates':['Operator Vercel Production deployment/build/HTTPS/cookies/OTP','Cloudflare authorized activation']}
 manifest['snapshotId']=hashlib.sha256(json.dumps(manifest['files'],sort_keys=True,separators=(',',':')).encode()).hexdigest()[:12]
 try:manifest['runtime'].update({'nodeVersion':subprocess.check_output(['node','--version'],text=True).strip(),'platform':platform.system().lower(),'architecture':platform.machine()})
 except (OSError,subprocess.CalledProcessError):manifest['runtime']['nodeVersion']='unverified'

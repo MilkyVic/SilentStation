@@ -1,3 +1,4 @@
+import {includeQa} from '../qa-policy.js';
 import { database } from '../database.js';
 import { getCurrentUser } from '../auth-core.js';
 import { requestToken } from '../http-security.js';
@@ -16,7 +17,7 @@ else if (u.role === 'teacher') {
         w.push('ta.user_id=' + bind(u.id));
 }
 else if (u.role !== 'superadmin')
-    fail(403, 'ACCOUNT_FORBIDDEN', 'Không có quyền xem báo cáo quản trị.'); if (q.schoolId) {
+    fail(403, 'ACCOUNT_FORBIDDEN', 'Không có quyền xem báo cáo quản trị.'); try { if(!includeQa(q.includeQa))w.push('NOT ta.is_qa'); } catch { fail(400,'ACCOUNT_INVALID','Bộ lọc QA không hợp lệ.'); } if (q.schoolId) {
     if (u.role !== 'superadmin' && q.schoolId !== u.profile.schoolId)
         fail(403, 'ACCOUNT_FORBIDDEN', 'Không có quyền ngoài trường.');
     w.push('ta.context_school_id=' + bind(q.schoolId));
@@ -24,13 +25,13 @@ else if (u.role !== 'superadmin')
     if (u.role === 'teacher' && q.classId !== u.profile.classId)
         fail(403, 'ACCOUNT_FORBIDDEN', 'Không có quyền ngoài lớp.');
     w.push('ta.context_class_id=' + bind(q.classId));
-} if (q.academicYear)
+} if(q.school)w.push("ta.context_snapshot->>'school'="+bind(String(q.school))); if(q.className)w.push("ta.context_snapshot->>'className'="+bind(String(q.className))); if (q.academicYear)
     w.push("ta.context_snapshot->>'academicYear'=" + bind(q.academicYear)); for (const [k, col] of [['templateId', 'ta.template_id'], ['scoreVersion', 'ta.score_version'], ['definitionDigest', 'ta.definition_digest']])
     if (q[k])
         w.push(col + '=' + bind(String(q[k]))); return { p, w, averaging: !!q.templateId && !!q.scoreVersion && !!q.definitionDigest }; }
 const joins = 'FROM test_attempts ta JOIN auth_users u ON u.id=ta.user_id JOIN test_templates tt ON tt.id=ta.template_id';
 const cols = "ta.*,u.username,u.profile_name,COALESCE(NULLIF(ta.template_snapshot->>'title',''),tt.title) AS template_title,ta.context_snapshot->>'school' AS school,ta.context_snapshot->>'className' AS class_name,ta.context_snapshot->>'academicYear' AS academic_year";
-function attempt(r: any) { return { attemptId: r.id, userId: r.user_id, userRole: r.user_role, username: r.username, userName: r.profile_name, school: r.school ?? 'Chưa xác định', className: r.class_name ?? '', academicYear: r.academic_year ?? '', contextStatus: r.context_status, templateId: r.template_id, templateTitle: r.template_title, scoreVersion: r.score_version, definitionDigest: r.definition_digest, scoreTotal: Number(r.score_total), scoreLevel: r.score_level, scorePayload: r.score_payload, suggestDass21: r.suggest_dass21, submittedAt: new Date(r.submitted_at).toISOString(), riskLevel: 'unreviewed', isHighRisk: null }; }
+function attempt(r: any) { return { attemptId: r.id,isQa:!!r.is_qa, userId: r.user_id, userRole: r.user_role, username: r.username, userName: r.profile_name, school: r.school ?? 'Chưa xác định', className: r.class_name ?? '', academicYear: r.academic_year ?? '', contextStatus: r.context_status, templateId: r.template_id, templateTitle: r.template_title, scoreVersion: r.score_version, definitionDigest: r.definition_digest, scoreTotal: Number(r.score_total), scoreLevel: r.score_level, scorePayload: r.score_payload, suggestDass21: r.suggest_dass21, submittedAt: new Date(r.submitted_at).toISOString(), riskLevel: 'unreviewed', isHighRisk: null }; }
 export async function snapshotOverview(token: string | null, q: any = {}) {
     const u = await getCurrentUser(token), s = scope(u, q), where = s.w.join(' AND '), db = database();
     const avg = s.averaging ? 'AVG(ta.score_total)::float8' : 'NULL::float8';
@@ -67,13 +68,13 @@ export async function legacyExport(req: any, res: any) { const u = await getCurr
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Content-Disposition', 'attachment; filename="tram-an-legacy-results.csv"');
-    res.write('\uFEFF' + ['attempt_id', 'submitted_at', 'username', 'template_id', 'template_title', 'score_version', 'definition_digest', 'score_total', 'stored_label', 'context_status', 'school_at_submit', 'class_at_submit', 'academic_year'].map(csv).join(',') + '\n');
+    res.write('\uFEFF' + ['attempt_id', 'submitted_at', 'username', 'template_id', 'template_title', 'score_version', 'definition_digest', 'score_total', 'stored_label', 'context_status', 'school_at_submit', 'class_at_submit', 'academic_year','is_qa'].map(csv).join(',') + '\n');
     for (;;) {
         const batch = (await c.query('FETCH 1000 FROM account_export')).rows;
         if (!batch.length)
             break;
         for (const r of batch)
-            res.write([r.id, new Date(r.submitted_at).toISOString(), r.username, r.template_id, r.template_title, r.score_version, r.definition_digest, Number(r.score_total), r.score_level, r.context_status, r.school, r.class_name, r.academic_year].map(csv).join(',') + '\n');
+            res.write([r.id, new Date(r.submitted_at).toISOString(), r.username, r.template_id, r.template_title, r.score_version, r.definition_digest, Number(r.score_total), r.score_level, r.context_status, r.school, r.class_name, r.academic_year,r.is_qa].map(csv).join(',') + '\n');
     }
     await c.query('COMMIT');
     res.end();

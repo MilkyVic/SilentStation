@@ -5,18 +5,18 @@ import crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { database, closeDatabase } from './database.js';
 import type { PoolClient } from 'pg';
-export const MIGRATION_FILES = ['001_auth_schema.sql', '002_test_schema.sql', '003_survey_schema.sql', '004_legacy_versions.sql', '005_runtime_hardening.sql','006_legacy_draft_identity.sql','007_account_management.sql','008_survey_invitations_preferences.sql'];
+export const MIGRATION_FILES = ['001_auth_schema.sql', '002_test_schema.sql', '003_survey_schema.sql', '004_legacy_versions.sql', '005_runtime_hardening.sql','006_legacy_draft_identity.sql','007_account_management.sql','008_survey_invitations_preferences.sql','009_qa_provenance.sql'];
 export type Migration = { name: string; sql: string; checksum: string };
 export async function migrationDefinitions(): Promise<Migration[]> {
     return Promise.all(MIGRATION_FILES.map(async name => { const sql = (await fs.readFile(path.resolve('server/sql', name), 'utf8')).replace(/^\uFEFF/, ''); return { name, sql, checksum: crypto.createHash('sha256').update(sql).digest('hex') }; }));
 }
 // Explicit legacy baseline checks against a transactional reference schema, including columns and constraints.
-async function verifyBaseline(client: PoolClient, definitions: Migration[]) {
+export async function verifyBaseline(client: PoolClient, definitions: Migration[]) {
     const schema = `ss_baseline_${crypto.randomBytes(6).toString('hex')}`;
     await client.query(`CREATE SCHEMA ${schema}`); await client.query(`SET LOCAL search_path TO ${schema}`);
     for (const m of definitions.slice(0, 2)) await client.query(m.sql);
-    const columns = await client.query(`SELECT table_name,column_name,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema=$1 ORDER BY table_name,ordinal_position`, [schema]);
-    const actual = await client.query(`SELECT table_name,column_name,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name=ANY($1::text[]) ORDER BY table_name,ordinal_position`, [[...new Set(columns.rows.map(r => r.table_name))]]);
+    const columns = await client.query(`SELECT table_name,column_name,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema=$1 ORDER BY table_name,column_name`, [schema]);
+    const actual = await client.query(`SELECT table_name,column_name,data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name=ANY($1::text[]) ORDER BY table_name,column_name`, [[...new Set(columns.rows.map(r => r.table_name))]]);
     const constraints = async (s: string) => (await client.query("SELECT c.relname AS table_name,pg_get_constraintdef(k.oid) AS definition FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=ANY($2::text[]) ORDER BY 1,2", [s, [...new Set(columns.rows.map(r => r.table_name))]])).rows;
     const expectedConstraints = await constraints(schema);
     const indexes=async(s:string)=>(await client.query("SELECT c.relname AS table_name,i.relname AS name,k.indisunique,k.indisprimary,pg_get_indexdef(i.oid) AS definition FROM pg_index k JOIN pg_class c ON c.oid=k.indrelid JOIN pg_class i ON i.oid=k.indexrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=ANY($2::text[]) ORDER BY 1,2",[s,[...new Set(columns.rows.map(r=>r.table_name))]])).rows.map(r=>({...r,definition:r.definition.replaceAll(s+'.','')}));

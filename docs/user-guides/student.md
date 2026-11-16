@@ -69,3 +69,6 @@
 | Nộp chưa nhận receipt | Retry cùng lần nộp; không bắt đầu phiếu mới để thay thế. |
 | Nháp hết hạn | Nháp không còn truy cập được; muốn tham gia lại cần mã hợp lệ và đồng thuận mới. |
 | OTP/email chưa khả dụng | Không dùng mã kiểm thử ở môi trường thật; kiểm tra dịch vụ với người phụ trách. |
+
+## Chưa thiết lập niên khóa/lớp
+Tài khoản có thể thuộc trường nhưng chưa có lớp hiện tại. Bạn vẫn đăng nhập, sửa hồ sơ và làm bài tự đánh giá; kết quả mới ghi đúng trường tại lúc nộp, lớp/niên khóa để trống nếu chưa xác nhận. Không dùng nhãn lớp cũ làm bằng chứng phân lớp hiện tại. Admin tạo lớp kèm niên khóa và phân công sau.

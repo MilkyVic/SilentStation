@@ -46,6 +46,7 @@ type ApiTemplateVersion = {
 };
 
 type ApiTestResultItem = {
+  isQa?:boolean;
   id: string;
   templateId: string;
   templateTitle: string;
@@ -57,6 +58,7 @@ type ApiTestResultItem = {
 };
 
 type ApiReportAttempt = {
+  isQa?:boolean;
   attemptId: string;
   userId: string;
   userRole: string;
@@ -487,6 +489,7 @@ export const testService = {
 
   async getReportsOverview(params: {
     days?: number;
+    includeQa?:boolean;
     school?: string;
     className?: string;
     limit?: number;
@@ -538,6 +541,7 @@ export const testService = {
     const query = new URLSearchParams();
     if (Number.isFinite(Number(params.days))) query.set('days', String(params.days));
     if (Number.isFinite(Number(params.limit))) query.set('limit', String(params.limit));
+    if(params.includeQa)query.set('includeQa','true');
     if (params.school) query.set('school', params.school);
     if (params.className) query.set('className', params.className);
     const suffix = query.toString() ? `?${query.toString()}` : '';

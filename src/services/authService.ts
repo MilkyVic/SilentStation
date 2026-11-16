@@ -192,7 +192,7 @@ const mapApiUserToAccount = (user: AuthApiUser, password = ''): AuthAccount => {
     username: normalizeUsername(user.username),
     password,
     role,
-    status: mapApiStatusToAuthStatus(user.status),revision:user.revision??0,
+    status: mapApiStatusToAuthStatus(user.status),isQa:!!user.isQa,qaAccessExpiresAt:user.qaAccessExpiresAt??null,revision:user.revision??0,
     profile: {
       schoolId:user.profile.schoolId,classId:user.profile.classId,bio:user.profile.bio,avatarKey:user.profile.avatarKey,emailVerified:user.profile.emailVerified,revision:user.revision,
       name: user.profile.name || user.username,

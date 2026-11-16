@@ -1,4 +1,5 @@
 // @ts-nocheck
+import {qaAccessAllowed} from './qa-policy.js';
 import crypto from 'node:crypto';
 import { Pool } from 'pg';
 import nodemailer from 'nodemailer';
@@ -361,6 +362,7 @@ const verifyAdminLoginOtpAndCreateSession = async (payload) => {
     const row = await verifyOtpAtomic('auth_admin_login_otps',otpSessionId,otpCode,hashAdminLoginOtp);
     const account = await findAccountById(row.user_id);
     if (!account || !shouldUseAdminOtp(account.role) || account.status !== 'active') throw new AuthHttpError(403,'AUTH_INVALID_ROLE','Tài khoản không còn đủ quyền.');
+    if (!qaAccessAllowed(account)) throw new AuthHttpError(403,'AUTH_QA_EXPIRED','Tài khoản kiểm thử đã hết hạn.');
     return createLoginSessionResult(account);
 };
 const encodeBase64Url = (value) => Buffer.from(value).toString('base64url');
@@ -405,6 +407,7 @@ const mapUserRow = (row) => ({
     username: row.username,
     passwordHash: row.password_hash,
     role: row.role,
+    isQa:!!row.is_qa,qaAccessExpiresAt:row.qa_access_expires_at?new Date(row.qa_access_expires_at).toISOString():null,
     status: row.status, revision:row.revision??0,credentialVersion:row.credential_version??0,
     profile: {
         name: row.profile_name,
@@ -422,6 +425,7 @@ const toApiUser = (account) => ({
     id: account.id,
     username: account.username,
     role: account.role,
+    isQa:!!account.isQa,qaAccessExpiresAt:account.qaAccessExpiresAt??null,
     status: account.status,revision:account.revision??0,
     profile: account.profile,
 });
@@ -493,7 +497,7 @@ const findAccountByUsername = async (username) => {
         profile_class_name,
         profile_phone,
         profile_teacher_type,
-        profile_subject, revision,credential_version,school_id,class_id,profile_bio,avatar_key,email_verified_at,activation_pending,disabled_from_status
+        profile_subject, revision,credential_version,school_id,class_id,profile_bio,avatar_key,email_verified_at,activation_pending,disabled_from_status,is_qa,qa_access_expires_at
       FROM auth_users
       WHERE username = $1
       LIMIT 1
@@ -518,7 +522,7 @@ const findAccountById = async (id) => {
         profile_class_name,
         profile_phone,
         profile_teacher_type,
-        profile_subject, revision,credential_version,school_id,class_id,profile_bio,avatar_key,email_verified_at,activation_pending,disabled_from_status
+        profile_subject, revision,credential_version,school_id,class_id,profile_bio,avatar_key,email_verified_at,activation_pending,disabled_from_status,is_qa,qa_access_expires_at
       FROM auth_users
       WHERE id = $1
       LIMIT 1
@@ -996,7 +1000,7 @@ export const listAdminAccounts = async (token) => {
         profile_class_name,
         profile_phone,
         profile_teacher_type,
-        profile_subject, revision,credential_version,school_id,class_id,profile_bio,avatar_key,email_verified_at,activation_pending,disabled_from_status
+        profile_subject, revision,credential_version,school_id,class_id,profile_bio,avatar_key,email_verified_at,activation_pending,disabled_from_status,is_qa,qa_access_expires_at
       FROM auth_users
       WHERE role = 'admin'
       ORDER BY created_at ASC
@@ -1088,7 +1092,7 @@ export const listScopedUsers = async (token, query = {}) => {
         profile_phone,
         profile_teacher_type,
         profile_subject,created_at,
-        TO_CHAR(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_time, revision,credential_version,school_id,class_id,profile_bio,avatar_key,email_verified_at,activation_pending,disabled_from_status
+        TO_CHAR(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_time, revision,credential_version,school_id,class_id,profile_bio,avatar_key,email_verified_at,activation_pending,disabled_from_status,is_qa,qa_access_expires_at
       FROM auth_users
       WHERE ${clauses.join(' AND ')}
       ORDER BY created_at DESC,id DESC
@@ -1127,7 +1131,7 @@ export const approveTeacherAccount = async (token, payload = {}) => {
         profile_class_name,
         profile_phone,
         profile_teacher_type,
-        profile_subject, revision,credential_version,school_id,class_id,profile_bio,avatar_key,email_verified_at,activation_pending,disabled_from_status
+        profile_subject, revision,credential_version,school_id,class_id,profile_bio,avatar_key,email_verified_at,activation_pending,disabled_from_status,is_qa,qa_access_expires_at
       FROM auth_users
       WHERE id = $1
       LIMIT 1
@@ -1200,7 +1204,7 @@ export const rejectTeacherAccount = async (token, payload = {}) => {
         profile_class_name,
         profile_phone,
         profile_teacher_type,
-        profile_subject, revision,credential_version,school_id,class_id,profile_bio,avatar_key,email_verified_at,activation_pending,disabled_from_status
+        profile_subject, revision,credential_version,school_id,class_id,profile_bio,avatar_key,email_verified_at,activation_pending,disabled_from_status,is_qa,qa_access_expires_at
       FROM auth_users
       WHERE id = $1
       LIMIT 1
@@ -1505,6 +1509,7 @@ export const loginAccount = async (payload) => {
     if (account.status !== 'active') {
         throw new AuthHttpError(403, 'AUTH_PENDING_APPROVAL', 'Tai khoan chua duoc kich hoat.');
     }
+    if (!qaAccessAllowed(account)) throw new AuthHttpError(403,'AUTH_QA_EXPIRED','Tài khoản kiểm thử đã hết hạn; cần quản trị gia hạn.');
     if (shouldUseAdminOtp(account.role)) {
         return issueAdminLoginOtp(account);
     }
@@ -1529,6 +1534,7 @@ export const getCurrentUser = async (token) => {
     }
     if ((payload.credentialVersion??0)!==(account.credentialVersion??0)) throw new AuthHttpError(401,'AUTH_INVALID_CREDENTIALS','Thông tin phiên đã thay đổi.');
     if (account.status !== 'active') throw new AuthHttpError(403, 'AUTH_PENDING_APPROVAL', 'Tài khoản không còn hoạt động.');
+    if (!qaAccessAllowed(account)) throw new AuthHttpError(403,'AUTH_QA_EXPIRED','Tài khoản kiểm thử đã hết hạn; cần quản trị gia hạn.');
     return toApiUser(account);
 };
 export const logoutToken = async (token) => {
@@ -1558,4 +1564,4 @@ export const logoutToken = async (token) => {
 
 export const closeAuthDatabase = async () => { if (pool) { await pool.end(); pool=null; initializedPromise=null; } };
 
-export const listRegistrationSchools = async () => { await initializeAuthCore(); if(process.env.ACCOUNT_MANAGEMENT_ENABLED==='true')return (await getPool().query("SELECT id,name FROM org_schools WHERE status='active' ORDER BY name,id")).rows; const r=await getPool().query("SELECT DISTINCT profile_school FROM auth_users WHERE role='admin' AND status='active' AND profile_school<>'' ORDER BY profile_school"); return r.rows.map((row,index)=>({id:String(index),name:normalizeSchoolName(row.profile_school)})); };
+export const listRegistrationSchools = async () => { await initializeAuthCore(); if(process.env.ACCOUNT_MANAGEMENT_ENABLED==='true')return (await getPool().query("SELECT id,name FROM org_schools WHERE status='active' AND NOT is_qa ORDER BY name,id")).rows; const r=await getPool().query("SELECT DISTINCT profile_school FROM auth_users WHERE role='admin' AND status='active' AND profile_school<>'' ORDER BY profile_school"); return r.rows.map((row,index)=>({id:String(index),name:normalizeSchoolName(row.profile_school)})); };

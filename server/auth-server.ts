@@ -1,3 +1,4 @@
+import {configuredCorsOrigin} from './runtime-config.js';
 import {legacyExport} from './accounts/reports.js';
 import 'dotenv/config';
 import {ACCOUNT_ROUTES,accountHandler,accountsEnabled} from './accounts/http.js';
@@ -59,7 +60,7 @@ app.use((_req,res,next)=>{res.setHeader('X-Content-Type-Options','nosniff');res.
 app.use(express.json({limit:'256kb'}));
 app.use((req,res,next)=>{try{stateChangeCsrf(req); if(req.body?.transport==='cookie'&&req.method==='POST')sameOrigin(req);next();}catch(e){next(e);}});
 
-const CORS_ORIGIN = process.env.AUTH_API_CORS_ORIGIN || '*';
+const CORS_ORIGIN = configuredCorsOrigin();
 const PORT = Number(process.env.AUTH_API_PORT || 3001);
 
 const getBearerToken = requestToken;

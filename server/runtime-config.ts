@@ -28,7 +28,7 @@ export function validateRuntime(env: Env = process.env) {
     validateSessionSecret(env); databaseConfig(env);
     if (env.NODE_ENV === 'production') {
         for (const name of ['APP_URL', 'AUTH_API_CORS_ORIGIN']) {
-            try { if (new URL(env[name] || '').protocol !== 'https:') throw new Error(); }
+            try { const origin=new URL(env[name] || ''); if (origin.protocol !== 'https:' || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) throw new Error(); }
             catch { throw new Error(`${name} must be an explicit HTTPS origin in production.`); }
         }
     }
@@ -47,3 +47,5 @@ export function smtpConfig(env: Env = process.env): any | null {
     const user = secretValue('AUTH_GMAIL_SMTP_USER', env), pass = secretValue('AUTH_GMAIL_SMTP_APP_PASSWORD', env);
     return user && pass ? { service: 'gmail', auth: { user, pass }, connectionTimeout: 5000, socketTimeout: 15000, tls: { rejectUnauthorized: true } } : null;
 }
+
+export function configuredCorsOrigin(env:Env=process.env){const value=env.AUTH_API_CORS_ORIGIN||'*';if(value==='*'){if(env.NODE_ENV==='production')throw Error('Explicit production CORS origin required.');return value;}const u=new URL(value);if(!['http:','https:'].includes(u.protocol)||u.username||u.password||u.pathname!=='/'||u.search||u.hash||env.NODE_ENV==='production'&&u.protocol!=='https:')throw Error('Invalid CORS origin.');return u.origin;}

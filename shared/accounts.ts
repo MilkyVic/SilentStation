@@ -28,6 +28,8 @@ export type ManagedUser = {
     activationPending: boolean;
     canRestore:boolean;
     emailVerified: boolean;
+    isQa: boolean;
+    qaAccessExpiresAt: string | null;
     schoolId: string | null;
     classId: string | null;
     profile: {

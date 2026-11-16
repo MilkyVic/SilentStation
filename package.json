@@ -1,7 +1,7 @@
 {
   "name": "silentstation",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -26,7 +26,11 @@
     "test:ui-print": "vite build --mode demo --config tests/ui-print/vite.config.ts && playwright test --config tests/ui-print/playwright.config.ts",
     "test:ui-live": "npm run build:api && VITE_ACCEPTANCE_BANNER=true vite build --outDir .acceptance/ui-live && playwright test --config tests/ui-live/playwright.config.ts",
     "build:native": "tsc -p tsconfig.acceptance.json --outDir .acceptance/native-api",
-    "test:native": "npm run build:native && SS_NATIVE_BUILD_DIR=.acceptance/native-api node scripts/test-native-acceptance.mjs"
+    "test:native": "npm run build:native && SS_NATIVE_BUILD_DIR=.acceptance/native-api node scripts/test-native-acceptance.mjs",
+    "deploy:preflight": "tsx server/deployment/preflight.ts",
+    "accounts:import": "tsx server/deployment/account-import-cli.ts",
+    "qa:initialize:cloud": "tsx server/test-fixtures/initialize-cloud.ts",
+    "test:pg17-restore": "npm run build:api && npm run build:native && node scripts/test-pg17-restore.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
@@ -82,5 +86,8 @@
     "tsx": {
       "esbuild": "0.28.1"
     }
+  },
+  "engines": {
+    "node": "22.x"
   }
 }

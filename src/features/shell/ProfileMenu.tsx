@@ -50,7 +50,7 @@ export default function ProfileMenu({account,onLogout,onOpen}:{account:AuthAccou
       <ChevronDown className="profile-chevron" size={16} aria-hidden="true"/>
     </button>
     {open&&<div ref={menu} id={menuId} className="profile-dropdown" role="menu" aria-label={ui("Menu tài khoản")} onKeyDown={navigateMenu}>
-      <div className="profile-dropdown-header" role="presentation"><strong>{name}</strong><span>@{account.username} · {ui(account.role)}</span></div>
+      <div className="profile-dropdown-header" role="presentation"><strong>{name}</strong><span>@{account.username} · {ui(account.role)}</span>{account.isQa&&<span className="qa-account-label">QA · {ui('Tài khoản kiểm thử')}<br/>{account.qaAccessExpiresAt&&new Date(account.qaAccessExpiresAt).toLocaleDateString()}</span>}</div>
       <Link role="menuitem" tabIndex={-1} to="/tai-khoan" onClick={()=>close(true)}><User size={17} aria-hidden="true"/>{ui("Tài khoản")}</Link>
       <Link role="menuitem" tabIndex={-1} to="/tai-khoan/settings" onClick={()=>close(true)}><Settings size={17} aria-hidden="true"/>{ui("Cài đặt")}</Link>
       {dashboard&&<Link role="menuitem" tabIndex={-1} to="/quan-tri" onClick={()=>close(true)}><LayoutDashboard size={17} aria-hidden="true"/>{management?ui("Tổng quan quản trị"):ui("Khu vực của tôi")}</Link>}

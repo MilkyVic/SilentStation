@@ -1,4 +1,8 @@
 export const accounts:Record<string,string>={
+  'Tài khoản kiểm thử':'Test account',
+  'Chưa có phân công lớp/niên khóa hợp lệ. Không thể xem danh sách học sinh hoặc tạo mã lớp; quản trị có thể thiết lập sau.':'No valid class or academic-year assignment. The student roster and class codes are unavailable until an administrator completes the setup.',
+  'Niên khóa và phân lớp chưa được thiết lập. Bạn vẫn có thể dùng hồ sơ và bài tự đánh giá; quản trị xác nhận lớp/niên khóa sau.':'The academic year and class have not been assigned. You can still use your profile and self-assessments; an administrator can complete the assignment later.',
+  'Bao gồm kết quả TEST/QA':'Include TEST/QA results',
   "Tài khoản của tôi": "My account",
   "Báo cáo": "Reports",
   "Đợt khảo sát A–J": "A–J campaigns",
